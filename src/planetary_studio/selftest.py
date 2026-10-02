@@ -6,6 +6,7 @@ import tempfile
 import sys
 import numpy as np
 import cv2
+from . import __version__
 from .cameras.simulator import planet_image
 from .ser import SerWriter, SerReader
 from .imaging import read_image, normalized, write_image
@@ -68,7 +69,7 @@ def run_self_test(report_path=None):
         window.close()
         app.processEvents()
         checks.append("Desktop startup, input loading, stack-to-sharpen handoff, shutdown")
-    report = {"passed": True, "version": "0.1.0", "checks": checks}
+    report = {"passed": True, "version": __version__, "checks": checks}
     if report_path:
         Path(report_path).parent.mkdir(parents=True, exist_ok=True)
         Path(report_path).write_text(json.dumps(report, indent=2), encoding="utf8")

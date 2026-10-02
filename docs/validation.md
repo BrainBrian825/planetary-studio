@@ -1,6 +1,6 @@
 # Validation and known limits
 
-CI runs the numerical/format/protocol/desktop tests, then repeats an end-to-end self-test **inside the packaged executable** on macOS arm64, Windows x64, Linux x64, and Linux arm64. This tests import availability and Qt plugin/dependency packaging as well as source functionality.
+CI runs the numerical/format/protocol/desktop tests, then repeats an end-to-end self-test **inside the packaged executable** on macOS arm64, Windows x64, Linux x64, and Linux arm64. Each portable download is then unpacked into a temporary directory and self-tested again. macOS code signatures are verified after extraction. This tests import availability, Qt plugin/dependency packaging, archive permissions and links, as well as source functionality.
 
 The automated suite checks raw SER pixel preservation and timestamps at multiple depths and Bayer patterns, external big-endian SER data, truncated recordings, file overwrite protection, Bayer RGB color order, recovery of known subpixel shifts, preference for sharp frames, reduction of noise in aligned stacks, calibration, prepared SER and master creation, high-depth TIFF/PNG/FITS round trips, sharpening identity and deconvolution, cancellation and file release, natural sorting, Alpaca ImageBytes types/orientation and an HTTP camera server, INDI FITS BLOB decoding, desktop startup, and threaded simulator recording.
 

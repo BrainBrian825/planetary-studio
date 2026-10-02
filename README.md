@@ -13,7 +13,7 @@ Get the portable application for your platform from [Releases](https://github.co
 Each release is published only after the automated tests and the **packaged application's** end-to-end self-test pass on every platform.
 Development downloads are also available in [Actions](https://github.com/BrainBrian825/planetary-studio/actions).
 
-- **macOS Apple silicon:** unzip and move `Planetary Studio.app` to Applications. Requires macOS 14 or newer; the build runs on the macOS 27 arm64 runner. This community build is ad hoc signed, not Apple notarized. If macOS blocks it, use **System Settings → Privacy & Security → Open Anyway** for the app you downloaded from this repository.
+- **macOS Apple silicon:** unzip and move `Planetary Studio.app` to Applications. The prebuilt download requires macOS 27 or newer. This community build is ad hoc signed, not Apple notarized. If macOS blocks it, use **System Settings → Privacy & Security → Open Anyway** for the app you downloaded from this repository.
 - **Windows x64:** unzip the entire folder and run `PlanetaryStudio.exe` inside it. Keep the `_internal` folder beside the executable.
 - **Linux:** unpack the archive and run `PlanetaryStudio/PlanetaryStudio`. The GUI needs the usual X11/Wayland desktop libraries; see [Building](docs/building.md). Direct USB access needs an appropriate udev rule.
 

@@ -2,11 +2,12 @@ import argparse
 import json
 import os
 import sys
+from . import __version__
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Planetary Studio — capture, prepare, stack, sharpen")
-    parser.add_argument("--version", action="version", version="Planetary Studio 0.1.0")
+    parser.add_argument("--version", action="version", version="Planetary Studio " + __version__)
     parser.add_argument(
         "--self-test", action="store_true", help="Verify the complete pipeline and desktop startup"
     )

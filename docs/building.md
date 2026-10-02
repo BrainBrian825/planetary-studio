@@ -6,6 +6,8 @@ Python 3.12, a supported Qt desktop, and the packages pinned in `requirements-bu
 
 Install the Command Line Tools and Homebrew's `libusb` and `pkgconf`. Create a virtual environment, install the requirements and project, and run `python native/build.py`. The bridge compiles the vendored libuvc and bundles libusb with relative library references. `python -m planetary_studio` starts the desktop.
 
+The prebuilt release targets macOS 27. Supporting earlier macOS versions requires rebuilding the native bridge and all bundled native dependencies with matching deployment targets, then testing on those systems.
+
 For a custom libusb location, `LIBUSB_INCLUDE_DIR` and `LIBUSB_LIBRARY` can identify a header directory and full library path. An installed libusb is otherwise found with pkg-config.
 
 ## Linux

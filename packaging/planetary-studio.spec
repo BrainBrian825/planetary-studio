@@ -1,8 +1,10 @@
 from pathlib import Path
 from importlib.metadata import distributions
 import sys
+import tomllib
 
 root = Path(SPECPATH).parent
+version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
 native = root / 'src/planetary_studio/native'
 binaries = [(str(p), 'planetary_studio/native') for p in native.glob('*') if p.suffix in ('.dylib', '.so', '.dll')]
 license_data = []
@@ -28,6 +30,6 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='PlanetaryStudio',
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='PlanetaryStudio')
 if sys.platform == 'darwin':
     app = BUNDLE(coll, name='Planetary Studio.app', bundle_identifier='org.planetary-studio.desktop',
-        info_plist={'CFBundleShortVersionString': '0.1.0', 'CFBundleVersion': '0.1.0',
+        info_plist={'CFBundleShortVersionString': version, 'CFBundleVersion': version,
                     'NSCameraUsageDescription': 'Planetary Studio uses your camera to capture astronomy images.',
-                    'NSHighResolutionCapable': True, 'LSMinimumSystemVersion': '14.0'})
+                    'NSHighResolutionCapable': True, 'LSMinimumSystemVersion': '27.0'})
