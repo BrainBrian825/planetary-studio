@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+build/
+dist/
+src/planetary_studio/native/
+*.ser
+*.avi
+*.fits
+*.tif
+*.tiff
+test-output/
+*.log
+.DS_Store

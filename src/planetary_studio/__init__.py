@@ -1,0 +1,3 @@
+"""Planetary Studio: an open planetary imaging workbench."""
+
+__version__ = "0.1.0"
