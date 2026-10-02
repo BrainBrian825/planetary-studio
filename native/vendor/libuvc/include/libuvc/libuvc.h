@@ -87,6 +87,8 @@ enum uvc_frame_format {
   UVC_FRAME_FORMAT_NV12,
   /** YUV: P010 */
   UVC_FRAME_FORMAT_P010,
+  /** 16-bit GRBG mosaic used by the NexImage 10 (BA16). */
+  UVC_FRAME_FORMAT_SGRBG16,
   /** Number of formats understood */
   UVC_FRAME_FORMAT_COUNT,
 };
@@ -809,4 +811,3 @@ uvc_error_t uvc_mjpeg2gray(uvc_frame_t *in, uvc_frame_t *out);
 #endif
 
 #endif // !def(LIBUVC_H)
-

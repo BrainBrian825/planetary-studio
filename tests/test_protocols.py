@@ -142,7 +142,10 @@ def test_indi_camera_against_fragmented_xml_socket_server():
                     conn.sendall(xml[start : start + 13].encode())
                 received = b""
                 while b"CCD_EXPOSURE_VALUE" not in received:
-                    received += conn.recv(4096)
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        raise ConnectionError("Client closed before requesting an exposure")
+                    received += chunk
                 result = f'<setBLOBVector device="Test CCD" name="CCD1"><oneBLOB name="CCD1" format=".fits" size="{len(memory.getvalue())}">{blob}</oneBLOB></setBLOBVector>'
                 for start in range(0, len(result), 97):
                     conn.sendall(result[start : start + 97].encode())
@@ -164,3 +167,36 @@ def test_indi_camera_against_fragmented_xml_socket_server():
         listener.close()
         thread.join(6)
     assert not errors
+
+
+def test_indi_delivers_completed_vector_after_fragmented_stream_becomes_idle():
+    import codecs
+    import socket
+    import xml.etree.ElementTree as ET
+    from planetary_studio.cameras.indi import Client
+
+    message = (
+        '<defNumberVector device="Test CCD" name="CCD_INFO" state="Ok">'
+        '<defNumber name="CCD_MAX_X">12</defNumber>'
+        '<defNumber name="CCD_MAX_Y">8</defNumber></defNumberVector>'
+    ).encode()
+    chunks = [message[i : i + 13] for i in range(0, len(message), 13)]
+
+    class FragmentedSocket:
+        def recv(self, _):
+            if chunks:
+                return chunks.pop(0)
+            raise socket.timeout()
+
+    client = Client.__new__(Client)
+    client.sock = FragmentedSocket()
+    client.parser = ET.XMLPullParser(events=("start", "end"))
+    client.decoder = codecs.getincrementaldecoder("utf8")()
+    client.parser.feed("<root>")
+    client.root = next(client.parser.read_events())[1]
+    client.properties, client.blobs = {}, []
+    while chunks:
+        client.poll()
+    client.poll()
+    assert client.properties[("Test CCD", "CCD_INFO")]["values"] == {"CCD_MAX_X": "12", "CCD_MAX_Y": "8"}
+    assert len(client.root) == 0

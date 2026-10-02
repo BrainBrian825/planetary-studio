@@ -1,5 +1,4 @@
 from pathlib import Path
-import os
 import platform
 import shutil
 import subprocess
@@ -8,6 +7,7 @@ import sys
 directory = Path("dist")
 if sys.platform == "darwin":
     app = directory / "Planetary Studio.app"
+    subprocess.run(["xattr", "-cr", str(app)], check=True)
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
     subprocess.run(

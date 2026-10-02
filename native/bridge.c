@@ -90,6 +90,10 @@ int ps_modes(ps_session *s, ps_mode *out, int capacity) {
         m->format_index = f->bFormatIndex; m->frame_index = r->bFrameIndex;
         m->interface_number = f->parent->bInterfaceNumber;
         if (f->bDescriptorSubtype == UVC_VS_FORMAT_MJPEG) memcpy(m->fourcc, "MJPG", 4);
+        else if (!memcmp(f->guidFormat, "\x7d\xeb\x36\xe4\x4f\x52\xce\x11\x9f\x53\x00\x20\xaf\x0b\xa7\x70", 16))
+          memcpy(m->fourcc, "BGR3", 4);
+        else if (!memcmp(f->guidFormat, "\x7e\xeb\x36\xe4\x4f\x52\xce\x11\x9f\x53\x00\x20\xaf\x0b\xa7\x70", 16))
+          memcpy(m->fourcc, "RGB3", 4);
         else memcpy(m->fourcc, f->fourccFormat, 4);
       }
     }

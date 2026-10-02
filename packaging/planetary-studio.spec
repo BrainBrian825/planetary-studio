@@ -18,7 +18,7 @@ a = Analysis([str(root / 'packaging/entry.py')], pathex=[str(root / 'src')], bin
            (str(root / 'native/vendor/licenses/libusb-LGPL-2.1.txt'), 'licenses/libusb'), *license_data],
     hiddenimports=['PySide6.QtMultimedia', 'planetary_studio.cameras.uvc', 'planetary_studio.cameras.asi',
                    'planetary_studio.cameras.qhy', 'planetary_studio.cameras.indi', 'planetary_studio.cameras.alpaca'],
-    hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=['tkinter', 'matplotlib', 'IPython', 'pytest'], noarchive=False)
+    hookspath=[str(root / 'packaging/hooks')], hooksconfig={}, runtime_hooks=[], excludes=['tkinter', 'matplotlib', 'IPython', 'pytest'], noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='PlanetaryStudio',
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False,

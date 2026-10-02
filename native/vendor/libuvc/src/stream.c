@@ -135,6 +135,8 @@ struct format_table_entry *_get_format_entry(enum uvc_frame_format format) {
       {'R',  'G',  'G',  'B', 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71})
     FMT(UVC_FRAME_FORMAT_SBGGR8,
       {'B',  'G',  'G',  'R', 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71})
+    FMT(UVC_FRAME_FORMAT_SGRBG16,
+      {'B',  'A',  '1',  '6', 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71})
     ABS_FMT(UVC_FRAME_FORMAT_COMPRESSED, 2,
       {UVC_FRAME_FORMAT_MJPEG, UVC_FRAME_FORMAT_H264})
     FMT(UVC_FRAME_FORMAT_MJPEG,
@@ -172,6 +174,15 @@ static uint8_t _uvc_frame_format_matches_guid(enum uvc_frame_format fmt, uint8_t
 static enum uvc_frame_format uvc_frame_format_for_guid(uint8_t guid[16]) {
   struct format_table_entry *format;
   enum uvc_frame_format fmt;
+
+  /* Equivalent vendor FOURCC aliases with the standard UVC GUID suffix. */
+  static const uint8_t suffix[12] = {0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71};
+  if (!memcmp(guid + 4, suffix, 12)) {
+    if (!memcmp(guid, "Y8  ", 4)) return UVC_FRAME_FORMAT_GRAY8;
+    if (!memcmp(guid, "YUYV", 4)) return UVC_FRAME_FORMAT_YUYV;
+    if (!memcmp(guid, "RGB3", 4)) return UVC_FRAME_FORMAT_RGB;
+    if (!memcmp(guid, "BGR3", 4)) return UVC_FRAME_FORMAT_BGR;
+  }
 
   for (fmt = 0; fmt < UVC_FRAME_FORMAT_COUNT; ++fmt) {
     format = _get_format_entry(fmt);

@@ -8,4 +8,6 @@ Synthetic truth images let tests measure registration and image error; this is s
 
 The physically connected NexImage 10 has been opened and streamed by the application's direct UVC adapter on macOS 27 arm64. The first raw GRBG8 hardware recording contains 259 frames in a three-second probe. Vendor SDK adapters and other camera models require physical hardware to confirm firmware behavior and vendor-library architecture compatibility. No such absent camera is labeled hardware tested.
 
+The NexImage 10's BA16 descriptor is mapped to GRBG16 for optional 16-bit capture. This mode remains experimentally supported; the hardware recording above validates GRBG8 only.
+
 Current limitations are described in the README and camera guide. In particular: no rotational derotation or drizzle; converted system-camera frames are 8-bit; INDI/Alpaca use repeated exposures; vendor SDK binaries need user installation; no hardware certification across every model; portable Linux requires compatible system desktop libraries. macOS/Windows packages do not have paid developer signing certificates.

@@ -45,13 +45,20 @@ class Client:
         try:
             data = self.sock.recv(1024 * 1024)
         except socket.timeout:
-            return
+            data = None
         except OSError as e:
             raise CameraError(f"INDI receive failed: {e}") from e
-        if not data:
+        if data == b"":
             raise CameraError("INDI server closed the connection.")
         try:
-            self.parser.feed(self.decoder.decode(data))
+            if data is None:
+                # Expat may defer a completed element on an open XML stream.
+                # Flush on idle, avoiding repeated reparsing of large BLOBs.
+                flush = getattr(self.parser, "flush", None)
+                if flush is not None:
+                    flush()
+            else:
+                self.parser.feed(self.decoder.decode(data))
             for event, node in self.parser.read_events():
                 if event != "end":
                     continue
