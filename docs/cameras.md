@@ -4,6 +4,8 @@
 
 Choose **Scan cameras → NexImage 10 [UVC] → Connect**. Select a raw GRBG mode and start preview. Capture records the raw mosaic; the preview debayers it to RGB.
 
+Choose resolution, Color or Mono, bit depth, and frame rate independently. The app filters later choices to the modes reported by the camera. A Color choice uses raw GRBG when available. The frame rate slider steps through advertised rates; exposure and gain sliders use the driver's actual limits, with numeric fields for precise values. The capture statistics show the measured frame rate. Disconnect before changing capture format.
+
 The camera identifies as USB vendor `199e`, product `8619` and exposes frame-based descriptors. This is different from cameras that expose only uncompressed UVC descriptors. The native bridge negotiates the advertised descriptor directly and preserves the exact frame interval.
 
 The bundled libuvc includes the macOS fix found while debugging oaCapture: when driver detachment returns `LIBUSB_ERROR_ACCESS`, it attempts `libusb_claim_interface`, which may still be allowed. The result of that claim is checked. It does not ignore authorization errors or bypass OS permissions. The bridge reports the actual USB error when opening or streaming fails.

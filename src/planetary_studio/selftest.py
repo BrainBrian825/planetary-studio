@@ -60,6 +60,19 @@ def run_self_test(report_path=None):
 
         app = QApplication.instance() or QApplication([])
         window = MainWindow()
+        assert not window.windowIcon().isNull()
+        from .cameras.simulator import SimulatedCamera
+
+        simulator = SimulatedCamera()
+        modes = simulator.modes()
+        window.camera_ready(modes, simulator.controls())
+        assert window.mode_selector.selected_mode() is modes[0]
+        window.mode_selector.color.setCurrentIndex(window.mode_selector.color.findData("Mono"))
+        window.mode_selector.depth.setCurrentIndex(window.mode_selector.depth.findData(8))
+        window.mode_selector.fps_slider.setValue(window.mode_selector.fps_slider.maximum())
+        selected = window.mode_selector.selected_mode()
+        assert selected.format == "MONO" and selected.bits == 8 and selected.fps == 60
+        checks.append("Logo loading, independent capture selectors, and sensor slider widgets")
         window.resize(1240, 830)
         window.set_source(str(path))
         window.stack_done(result)

@@ -23,7 +23,15 @@ class SimulatedCamera(Camera):
         self.exposure, self.gain, self.next_time = 10.0, 10.0, 0.0
 
     def modes(self):
-        return [Mode(640, 480, 30, "RGB", 16), Mode(320, 240, 30, "RGB", 16)]
+        preferred = [Mode(640, 480, 30, "RGB", 16), Mode(320, 240, 30, "RGB", 16)]
+        return preferred + [
+            Mode(w, h, fps, color, bits)
+            for w, h in ((640, 480), (320, 240))
+            for color in ("RGB", "MONO")
+            for bits in (8, 16)
+            for fps in (15, 30, 60)
+            if not (color == "RGB" and bits == 16 and fps == 30)
+        ]
 
     def start(self, mode):
         self.mode = mode
@@ -42,7 +50,14 @@ class SimulatedCamera(Camera):
         image = image * min(2.0, self.exposure / 10) + self.rng.normal(
             0, 0.008 + self.gain * 0.0002, image.shape
         )
-        return Frame(np.rint(np.clip(image, 0, 1) * 65535).astype(np.uint16), "RGB", 16)
+        if self.mode.format == "MONO":
+            image = cv2.cvtColor(image.astype(np.float32), cv2.COLOR_RGB2GRAY)
+        maximum = (1 << self.mode.bits) - 1
+        return Frame(
+            np.rint(np.clip(image, 0, 1) * maximum).astype(np.uint16 if self.mode.bits == 16 else np.uint8),
+            self.mode.format,
+            self.mode.bits,
+        )
 
     def controls(self):
         return {"Exposure (ms)": (0.1, 1000.0, 10.0), "Gain": (0.0, 100.0, 10.0)}

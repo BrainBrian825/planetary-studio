@@ -3,9 +3,9 @@
 One desktop application for **camera capture → preparation → alignment and stacking → sharpening**.
 Built for macOS Apple silicon, Windows x64, and Linux x64/arm64.
 
-![Planetary Studio sharpening workspace with a simulated planet](docs/images/desktop.png)
+![Planetary Studio dark appearance with separate camera controls](docs/images/dark-capture.png)
 
-Planetary Studio brings the core tasks normally performed in oaCapture, PIPP, AutoStakkert, and waveSharp into one open application. Version 0.1 is a **prerelease** with an implemented end-to-end workflow. It is not yet a feature-for-feature or image-quality equivalent of those mature applications. The algorithm and hardware limits are documented rather than hidden behind compatibility claims.
+Planetary Studio brings the core tasks normally performed in oaCapture, PIPP, AutoStakkert, and waveSharp into one open application. Version 0.2 is a **prerelease** with an implemented end-to-end workflow. It is not yet a feature-for-feature or image-quality equivalent of those mature applications. The algorithm and hardware limits are documented rather than hidden behind compatibility claims.
 
 ## Download
 
@@ -16,6 +16,16 @@ Development downloads are also available in [Actions](https://github.com/BrainBr
 - **macOS Apple silicon:** unzip and move `Planetary Studio.app` to Applications. The prebuilt download requires macOS 27 or newer. This community build is ad hoc signed, not Apple notarized. If macOS blocks it, use **System Settings → Privacy & Security → Open Anyway** for the app you downloaded from this repository.
 - **Windows x64:** unzip the entire folder and run `PlanetaryStudio.exe` inside it. Keep the `_internal` folder beside the executable.
 - **Linux:** unpack the archive and run `PlanetaryStudio/PlanetaryStudio`. The GUI needs the usual X11/Wayland desktop libraries; see [Building](docs/building.md). Direct USB access needs an appropriate udev rule.
+
+## Appearance and camera controls
+
+Use **Appearance** at the bottom of the sidebar, or **View → Appearance**, to choose **Follow system**, **Light**, or **Dark**. Follow system is the default and reacts to appearance changes reported by the desktop. A manual choice is saved across restarts. On desktops without system appearance reporting, use the manual override. [Light appearance preview](docs/images/light-capture.png).
+
+On macOS, open `Planetary Studio.app` from Finder. It runs as a normal application with its own [planet logo](docs/branding.md) in the Dock. To keep it there after quitting, choose **Options → Keep in Dock** from the icon's menu.
+
+After connecting a camera, **Resolution**, **Color / Mono**, **Bit depth**, and **Frame rate** are separate controls. The frame rate slider steps through valid rates for the other selections. Controls with only one available choice are disabled. Unsupported combinations are never sent to the driver; native Bayer formats and exact USB frame intervals are preserved. Disconnect to change the capture format after starting preview.
+
+Exposure and gain use sliders with exact-value fields. Exposure sliders use a logarithmic scale for cameras with a wide exposure range, making short planetary exposures easier to adjust. Their limits come from the camera driver. Actual frame rate may be lower than the selected rate because of exposure time or transfer speed.
 
 ## The workflow
 
@@ -46,7 +56,7 @@ Projects save source paths and processing settings as readable JSON. Outputs inc
 - SER files are memory mapped. Processing reads frames in passes instead of retaining the complete recording in RAM. Quality metadata is proportional to frame count × alignment point count. Video seeking and raw disk bandwidth still affect speed.
 - Global alignment uses phase correlation and a reference built from the best frames. Local points use overlapping feathered patches and independent frame ranking. Texture-free areas fall back to the global stack.
 - Quality is gradient energy after mild noise smoothing. Extremely noisy or saturated data can still affect rankings. Exposure normalization is optional.
-- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented in 0.1.**
+- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented in 0.2.**
 - The engine is independently implemented; it does not contain AutoStakkert or waveSharp code. There has been no claim of numerical equivalence to their algorithms.
 
 ## Build or run from source

@@ -3,8 +3,8 @@ from pathlib import Path
 import json
 import time
 import numpy as np
-from PySide6.QtCore import Qt, QSettings, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, QSettings, QTimer, QSignalBlocker
+from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -42,33 +42,10 @@ from .processing import StackOptions, stack_source, finish_image, export_prepare
 from .sources import open_source
 from .widgets import ImageView, Histogram, QualityPlot
 from .workers import TaskWorker, CameraWorker
+from .controls import CameraModeSelector, SliderControl
+from .theme import ThemeController
 
-STYLE = """
-QWidget { background: #151e2d; color: #e8edf5; font-size: 13px; }
-QMainWindow, QStackedWidget { background: #101722; }
-QGroupBox { border: 1px solid #2b3a50; border-radius: 9px; margin-top: 14px; padding: 15px 10px 10px; font-weight: 600; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #b2c7e0; }
-QPushButton { background: #26364d; border: 1px solid #364b67; padding: 9px 13px; border-radius: 6px; }
-QPushButton:hover { background: #334965; }
-QPushButton:disabled { color: #64748b; background: #1b2636; border-color: #253348; }
-QPushButton[primary="true"] { background: #68d7df; color: #101722; border-color: #68d7df; font-weight: 700; }
-QPushButton[primary="true"]:hover { background: #95e7ec; }
-QPushButton[primary="true"]:disabled { background: #244d58; color: #839aa5; }
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit { background: #0f1724; border: 1px solid #33465f; border-radius: 5px; padding: 6px; selection-background-color: #376170; }
-QComboBox::drop-down { width: 22px; border: 0; }
-QListWidget { background: #111a28; border: 0; padding: 12px; font-size: 15px; outline: 0; }
-QListWidget::item { padding: 16px 10px; border-radius: 6px; margin: 3px 0; }
-QListWidget::item:selected { background: #243b50; color: #89e1e7; }
-QProgressBar { border: 1px solid #2b3a50; border-radius: 4px; text-align: center; height: 19px; }
-QProgressBar::chunk { background: #377e92; }
-QScrollArea, QGraphicsView, QTableWidget { border: 1px solid #26374d; border-radius: 6px; }
-QHeaderView::section { background: #243248; border: 0; padding: 8px; }
-QCheckBox { spacing: 8px; }
-QSlider::groove:horizontal { height: 4px; background: #33465f; border-radius: 2px; }
-QSlider::handle:horizontal { background: #68d7df; width: 14px; margin: -5px 0; border-radius: 6px; }
-QTextBrowser { background: #111a28; padding: 12px; border: 0; }
-QStatusBar { background: #0f1724; color: #a3b7cf; }
-"""
+ICON_PATH = Path(__file__).resolve().parent / "assets/planetary-studio.png"
 
 
 def button(text, callback=None, primary=False):
@@ -110,7 +87,8 @@ def page_layout(title, subtitle):
     layout.addWidget(heading)
     hint = QLabel(subtitle)
     hint.setWordWrap(True)
-    hint.setStyleSheet("color: #93a8c3; padding-bottom: 8px;")
+    hint.setProperty("secondary", True)
+    hint.setStyleSheet("padding-bottom: 8px;")
     layout.addWidget(hint)
     return page, layout
 
@@ -119,8 +97,8 @@ def scroll_panel(widget):
     panel = QScrollArea()
     panel.setWidgetResizable(True)
     panel.setWidget(widget)
-    panel.setMinimumWidth(320)
-    panel.setMaximumWidth(420)
+    panel.setMinimumWidth(400)
+    panel.setMaximumWidth(460)
     return panel
 
 
@@ -128,8 +106,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Planetary Studio")
+        self.setWindowIcon(QIcon(str(ICON_PATH)))
         self.resize(1240, 830)
-        self.setMinimumSize(920, 640)
+        self.setMinimumSize(1000, 640)
         self.settings = QSettings("PlanetaryStudio", "PlanetaryStudio")
         self.camera_settings = json.loads(self.settings.value("camera_settings", "{}"))
         self.camera_worker, self.job, self.scan_worker = None, None, None
@@ -153,12 +132,34 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.build_sharpen())
         self.pages.addWidget(self.build_batch())
         self.pages.addWidget(self.build_support())
-        layout.addWidget(self.nav)
+        sidebar = QWidget()
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(8, 14, 8, 14)
+        brand = QHBoxLayout()
+        brand_icon = QLabel()
+        brand_icon.setPixmap(QIcon(str(ICON_PATH)).pixmap(36, 36))
+        brand.addWidget(brand_icon)
+        brand_name = QLabel("Planetary\nStudio")
+        brand_name.setStyleSheet("font-weight: 600;")
+        brand.addWidget(brand_name, 1)
+        side_layout.addLayout(brand)
+        side_layout.addWidget(self.nav, 1)
+        side_layout.addWidget(QLabel("Appearance"))
+        self.appearance_combo = QComboBox()
+        self.appearance_combo.setAccessibleName("Appearance")
+        for title, value in (("Follow system", "system"), ("Light", "light"), ("Dark", "dark")):
+            self.appearance_combo.addItem(title, value)
+        side_layout.addWidget(self.appearance_combo)
+        layout.addWidget(sidebar)
         layout.addWidget(self.pages, 1)
         self.nav.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.nav.setCurrentRow(0)
         self.setCentralWidget(central)
-        self.setStyleSheet(STYLE)
+        self.theme = ThemeController(self, self.settings)
+        self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(self.theme.mode))
+        self.appearance_combo.currentIndexChanged.connect(
+            lambda: self.theme.set_mode(self.appearance_combo.currentData())
+        )
         self.statusBar().showMessage(f"Planetary Studio {__version__} · Capture → Prepare → Stack → Sharpen")
         menu = self.menuBar().addMenu("File")
         for text, callback, shortcut in [
@@ -178,11 +179,31 @@ class MainWindow(QMainWindow):
         about = QAction("Getting started", self)
         about.triggered.connect(lambda: self.nav.setCurrentRow(4))
         help_menu.addAction(about)
+        view_menu = self.menuBar().addMenu("View")
+        theme_menu = view_menu.addMenu("Appearance")
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        self.theme_actions = {}
+        for title, value in (("Follow system", "system"), ("Light", "light"), ("Dark", "dark")):
+            action = QAction(title, self)
+            action.setCheckable(True)
+            action.setChecked(self.theme.mode == value)
+            action.triggered.connect(lambda checked, mode=value: self.theme.set_mode(mode))
+            theme_group.addAction(action)
+            theme_menu.addAction(action)
+            self.theme_actions[value] = action
+        self.theme.changed.connect(self.appearance_changed)
         self.sharpen_timer = QTimer(self)
         self.sharpen_timer.setSingleShot(True)
         self.sharpen_timer.setInterval(250)
         self.sharpen_timer.timeout.connect(self.update_sharpen)
         self.sharpen_worker = None
+
+    def appearance_changed(self, mode):
+        with QSignalBlocker(self.appearance_combo):
+            self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(mode))
+        for value, action in self.theme_actions.items():
+            action.setChecked(value == mode)
 
     def error(self, message):
         self.log(message)
@@ -221,9 +242,8 @@ class MainWindow(QMainWindow):
         camera.layout().addLayout(row)
         self.connect_button = button("Connect", self.connect_camera, True)
         camera.layout().addWidget(self.connect_button)
-        self.mode_combo = QComboBox()
-        self.mode_combo.setEnabled(False)
-        camera.layout().addWidget(self.mode_combo)
+        self.mode_selector = CameraModeSelector()
+        camera.layout().addWidget(self.mode_selector)
         self.preview_button = button("Start live preview", self.start_preview, True)
         self.preview_button.setEnabled(False)
         camera.layout().addWidget(self.preview_button)
@@ -251,7 +271,7 @@ class MainWindow(QMainWindow):
             "SER preserves raw Bayer, monochrome, or RGB pixels at 8 or 16 bits. Preview color conversion does not alter raw recordings."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: #93a8c3;")
+        note.setProperty("secondary", True)
         recording.layout().addWidget(note)
         pl.addWidget(recording)
         pl.addStretch()
@@ -323,34 +343,31 @@ class MainWindow(QMainWindow):
         self.camera_worker.start()
 
     def camera_ready(self, modes, controls):
-        self.mode_combo.clear()
-        for mode in modes:
-            self.mode_combo.addItem(mode.label, mode)
-        self.mode_combo.setEnabled(True)
+        self.mode_selector.set_modes(modes)
         self.preview_button.setEnabled(True)
         self.connect_button.setText("Disconnect")
         self.connect_button.setEnabled(True)
         while self.controls_form.rowCount():
             self.controls_form.removeRow(0)
         for name, (lo, hi, current) in controls.items():
-            spin = number(lo, hi, current, 2)
-            spin.setKeyboardTracking(False)
-            spin.valueChanged.connect(
+            control = SliderControl(lo, hi, current, name)
+            control.valueChanged.connect(
                 lambda value, n=name: (
                     self.camera_worker.command("control", n, value)
                     if self.camera_worker and self.camera_worker.isRunning()
                     else None
                 )
             )
-            self.controls_form.addRow(name, spin)
-        self.log("Camera connected. Choose a mode and start live preview.")
+            self.controls_form.addRow(name, control)
+        self.log("Camera connected. Choose resolution, color, bit depth, and frame rate, then start preview.")
 
     def start_preview(self):
-        mode = self.mode_combo.currentData()
+        mode = self.mode_selector.selected_mode()
         if self.camera_worker and mode:
             self.camera_worker.command("start", mode)
             self.preview_button.setEnabled(False)
-            self.mode_combo.setEnabled(False)
+            self.mode_selector.setEnabled(False)
+            self.mode_selector.info.setText(self.mode_selector.info.text() + " · disconnect to change format")
 
     def camera_preview(self, image, stats):
         self.last_capture_image = image
@@ -371,7 +388,7 @@ class MainWindow(QMainWindow):
         self.device_combo.setEnabled(True)
         self.scan_button.setEnabled(True)
         self.preview_button.setEnabled(False)
-        self.mode_combo.setEnabled(False)
+        self.mode_selector.setEnabled(False)
         self.record_button.setEnabled(False)
         self.record_button.setProperty("recording", False)
         self.record_button.setText("Record SER…")
@@ -1182,6 +1199,8 @@ def run():
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Planetary Studio")
     app.setOrganizationName("PlanetaryStudio")
+    app.setWindowIcon(QIcon(str(ICON_PATH)))
+    app.setDesktopFileName("planetary-studio")
     app.setStyle("Fusion")
     window = MainWindow()
     window.show()

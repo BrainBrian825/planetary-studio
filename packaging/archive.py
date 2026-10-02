@@ -2,6 +2,7 @@ from pathlib import Path
 import argparse
 import os
 import platform
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,11 @@ with tempfile.TemporaryDirectory(prefix="planetary-studio-download-test-") as te
     if sys.platform == "darwin":
         subprocess.run(["ditto", "-x", "-k", str(archive), temporary], check=True)
         downloaded_app = extracted / "Planetary Studio.app"
+        info = plistlib.loads((downloaded_app / "Contents/Info.plist").read_bytes())
+        if info.get("LSBackgroundOnly") or info.get("LSUIElement"):
+            raise RuntimeError("The macOS bundle must run as a normal Dock application.")
+        if info.get("CFBundleIconFile") != "planetary-studio.icns":
+            raise RuntimeError("The macOS bundle is missing its Planetary Studio icon.")
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(downloaded_app)], check=True)
         executable = downloaded_app / "Contents/MacOS/PlanetaryStudio"
     else:
