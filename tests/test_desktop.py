@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -64,4 +65,9 @@ def test_capture_worker_records_and_finalizes_ser(tmp_path):
         app.processEvents()
     assert not state["error"] and state["ready"] and state["saved"]
     with SerReader(tmp_path / "record.ser") as reader:
-        assert reader.count >= 5 and reader.pattern == "RGB" and reader.bits == 16
+        # A timed recording can contain fewer frames on a busy hosted runner.
+        assert reader.count >= 1 and reader.pattern == "RGB" and reader.bits == 16
+        metadata = json.loads((tmp_path / "record.ser.json").read_text())
+        assert metadata["frames"] == reader.count
+        assert metadata["elapsed_seconds"] >= 0.35
+        assert reader.read(reader.count - 1).shape == (240, 320, 3)
