@@ -44,6 +44,7 @@ from .widgets import ImageView, Histogram, QualityPlot
 from .workers import TaskWorker, CameraWorker
 from .controls import CameraModeSelector, SliderControl
 from .theme import ThemeController
+from .preview import preview_frame, preview_sample
 
 ICON_PATH = Path(__file__).resolve().parent / "assets/planetary-studio.png"
 
@@ -114,8 +115,17 @@ class MainWindow(QMainWindow):
         self.camera_worker, self.job, self.scan_worker = None, None, None
         self.devices, self.source_path, self.result = [], None, None
         self.original, self.finished_image, self.last_capture_image = None, None, None
+        self.sharpen_sample_indices = None
         self.last_recording = ""
         self.finish_generation = 0
+        self.preview_generation = 0
+        self.preparation_generation = 0
+        self.preview_worker, self.sample_result = None, None
+        self.source_info = {}
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.setInterval(200)
+        self.preview_timer.timeout.connect(self.update_frame_preview)
         self.batch_paths = []
         self.batch_directory = str(Path.home() / "Pictures/Planetary Studio")
         self._project_path = None
@@ -439,6 +449,27 @@ class MainWindow(QMainWindow):
         self.source_label.setWordWrap(True)
         row.addWidget(self.source_label, 1)
         layout.addLayout(row)
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("View"))
+        self.frame_view_mode = QComboBox()
+        self.frame_view_mode.addItems(["Original frame", "Prepared frame", "Sample stack", "Full stack"])
+        self.frame_view_mode.setAccessibleName("Preview view")
+        self.frame_view_mode.setCurrentIndex(1)
+        self.frame_view_mode.model().item(2).setEnabled(False)
+        self.frame_view_mode.model().item(3).setEnabled(False)
+        toolbar.addWidget(self.frame_view_mode)
+        self.preview_brighten = QCheckBox("Brighten preview")
+        self.preview_brighten.setToolTip("Display only. This does not change the exported image.")
+        toolbar.addWidget(self.preview_brighten)
+        toolbar.addStretch()
+        toolbar.addWidget(QLabel("Sample frames"))
+        self.sample_count = integer(2, 64, 12)
+        self.sample_button = button("Preview sample", self.run_sample)
+        self.sample_button.setToolTip("Stack a few frames spread across the recording, using the current settings.")
+        self.sample_button.setEnabled(False)
+        toolbar.addWidget(self.sample_count)
+        toolbar.addWidget(self.sample_button)
+        layout.addLayout(toolbar)
         split = QSplitter()
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -446,10 +477,15 @@ class MainWindow(QMainWindow):
         self.stack_view = ImageView("Open a SER, video, or image sequence")
         self.frame_slider = QSlider(Qt.Horizontal)
         self.frame_slider.setEnabled(False)
+        self.frame_slider.setAccessibleName("Preview frame")
         self.frame_slider.valueChanged.connect(self.inspect_frame)
+        self.preview_details = QLabel("Open a recording to preview settings on one frame or a short sample.")
+        self.preview_details.setWordWrap(True)
+        self.preview_details.setProperty("secondary", True)
         self.quality_plot = QualityPlot()
         ll.addWidget(self.stack_view, 1)
         ll.addWidget(self.frame_slider)
+        ll.addWidget(self.preview_details)
         ll.addWidget(self.quality_plot)
         panel = QWidget()
         pl = QVBoxLayout(panel)
@@ -461,7 +497,7 @@ class MainWindow(QMainWindow):
         self.bayer_combo = QComboBox()
         self.bayer_combo.addItems(["AUTO", "MONO", "RGGB", "GRBG", "GBRG", "BGGR"])
         self.bayer_combo.setToolTip(
-            "AUTO uses the SER header. For raw image sequences choose the sensor Bayer pattern."
+            "AUTO uses the SER header. Raw grayscale AVI files and images may need a Bayer pattern. Preview the colors before stacking."
         )
         form.addRow("Bayer pattern", self.bayer_combo)
         self.crop_w, self.crop_h = integer(0, 20000, 0), integer(0, 20000, 0)
@@ -486,10 +522,13 @@ class MainWindow(QMainWindow):
         stack = group("Lucky imaging")
         form = QFormLayout()
         self.keep_percent = number(0.1, 100, 25, 1, "%")
+        self.keep_percent.valueChanged.connect(self.quality_plot.set_keep_percent)
         form.addRow("Keep best", self.keep_percent)
         self.local_alignment = QCheckBox("Local alignment points")
         self.local_alignment.setChecked(True)
         form.addRow(self.local_alignment)
+        self.show_alignment = QCheckBox("Show alignment points in preview")
+        form.addRow(self.show_alignment)
         self.ap_size = integer(16, 512, 64)
         self.ap_size.setSingleStep(16)
         form.addRow("Point size", self.ap_size)
@@ -498,12 +537,12 @@ class MainWindow(QMainWindow):
         self.scale_combo.setToolTip("Lanczos enlargement; this is not drizzle reconstruction.")
         form.addRow("Output size", self.scale_combo)
         stack.layout().addLayout(form)
-        self.stack_button = button("Align & Stack", self.run_stack, True)
-        stack.layout().addWidget(self.stack_button)
+        self.stack_button = button("Stack all frames", self.run_stack, True)
+        self.stack_button.setEnabled(False)
         self.save_stack_button = button("Export stack…", self.save_stack)
         self.save_stack_button.setEnabled(False)
-        stack.layout().addWidget(self.save_stack_button)
-        stack.layout().addWidget(button("Continue to Sharpen →", lambda: self.nav.setCurrentRow(2)))
+        self.to_sharpen_button = button("Continue to Sharpen →", self.continue_to_sharpen)
+        self.to_sharpen_button.setEnabled(False)
         pl.addWidget(stack)
         pl.addStretch()
         split.addWidget(left)
@@ -518,6 +557,22 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         row.addWidget(self.cancel_button)
         layout.addLayout(row)
+        actions = QHBoxLayout()
+        actions.addWidget(self.stack_button, 1)
+        actions.addWidget(self.save_stack_button)
+        actions.addWidget(self.to_sharpen_button)
+        layout.addLayout(actions)
+        self.frame_view_mode.currentIndexChanged.connect(self.view_changed)
+        self.preview_brighten.toggled.connect(self.view_changed)
+        self.show_alignment.toggled.connect(self.view_changed)
+        for combo in (self.target_combo, self.bayer_combo, self.scale_combo):
+            combo.currentIndexChanged.connect(self.preparation_changed)
+        for spin in (self.crop_w, self.crop_h, self.keep_percent, self.ap_size):
+            spin.valueChanged.connect(self.preparation_changed)
+        for check in (self.hot_pixels, self.brightness, self.local_alignment):
+            check.toggled.connect(self.preparation_changed)
+        for field in (self.dark_path, self.flat_path):
+            field.editingFinished.connect(self.preparation_changed)
         return page
 
     def options(self):
@@ -540,56 +595,186 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Open recording or image sequence",
-            "",
+            self.settings.value("last_input_directory", str(Path.home() / "Downloads")),
             "Imaging files (*.ser *.avi *.mov *.mp4 *.mkv *.png *.tif *.tiff *.fits *.fit *.fts *.jpg *.jpeg *.bmp);;All files (*)",
         )
         if paths:
             self.set_source(paths[0] if len(paths) == 1 else paths)
 
     def pick_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "Open image sequence folder")
+        path = QFileDialog.getExistingDirectory(
+            self, "Open image sequence folder",
+            self.settings.value("last_input_directory", str(Path.home() / "Downloads")),
+        )
         if path:
             self.set_source(path)
 
     def set_source(self, path):
+        if self.job and self.job.isRunning():
+            self.error("Wait for processing to finish or cancel it before opening another recording.")
+            return
         try:
             source = open_source(path)
             try:
                 frame = source.read(0)
                 self.source_path = path
-                from .imaging import debayer
-
-                pattern = source.pattern if source.pattern not in ("RGB", "BGR") else None
-                self.stack_view.set_image(normalized(debayer(frame, pattern), source.bits), stretch=True)
+                self.preparation_generation += 1
+                gray_video = (source.pattern == "RGB" and frame.ndim == 3
+                              and np.array_equal(frame[..., 0], frame[..., 1])
+                              and np.array_equal(frame[..., 1], frame[..., 2]))
+                self.source_info = dict(count=source.count, width=frame.shape[1], height=frame.shape[0],
+                                        bits=source.bits, gray_video=gray_video)
+                self.result, self.sample_result = None, None
+                self.original, self.finished_image = None, None
+                self.sharpen_sample_indices = None
+                self.save_finished_button.setEnabled(False)
+                self.sharpen_view.clear_image()
+                self.sharpen_input_label.setText("Preview a sample or stack this recording to continue.")
+                self.sharpen_histogram.curves = []
+                self.sharpen_histogram.update()
+                self.frame_view_mode.model().item(2).setEnabled(False)
+                self.frame_view_mode.model().item(3).setEnabled(False)
+                with QSignalBlocker(self.frame_view_mode):
+                    self.frame_view_mode.setCurrentIndex(1)
+                self.save_stack_button.setEnabled(False)
+                self.to_sharpen_button.setEnabled(False)
+                self.quality_plot.set_scores([])
+                self.stack_button.setEnabled(not (self.job and self.job.isRunning()))
+                self.sample_button.setEnabled(self.stack_button.isEnabled())
                 self.frame_slider.blockSignals(True)
                 self.frame_slider.setRange(0, source.count - 1)
                 self.frame_slider.setValue(0)
                 self.frame_slider.setEnabled(True)
                 self.frame_slider.blockSignals(False)
                 label = f"{len(path)} images" if isinstance(path, list) else Path(path).name
+                depth = f"{source.bits}-bit" if source.bits else f"{frame.dtype.itemsize * 8}-bit float"
                 self.source_label.setText(
-                    f"{label} · {source.count:,} frames · {frame.shape[1]} × {frame.shape[0]}"
+                    f"{label} · {source.count:,} frames · {frame.shape[1]} × {frame.shape[0]} · {depth}"
                 )
+                self.source_label.setToolTip(
+                    "Grayscale samples: if this is raw color camera footage, choose a Bayer pattern and inspect the preview."
+                    if gray_video else "Source recording dimensions and pixel depth."
+                )
+                chosen = Path(path[0] if isinstance(path, list) else path)
+                self.settings.setValue("last_input_directory", str(chosen if chosen.is_dir() else chosen.parent))
             finally:
                 source.close()
             self.nav.setCurrentRow(1)
+            self.schedule_frame_preview()
         except Exception as e:
             self.error(str(e))
 
     def inspect_frame(self, index):
-        if not self.source_path:
-            return
-        try:
-            from .processing import Preprocessor
+        if self.frame_view_mode.currentIndex() >= 2:
+            self.frame_view_mode.setCurrentIndex(1)
+        self.schedule_frame_preview()
 
-            source = open_source(self.source_path)
-            try:
-                image = Preprocessor(source, self.options()).read(index)
-            finally:
-                source.close()
-            self.stack_view.set_image(image, stretch=True)
-        except Exception as e:
-            self.log(str(e))
+    def preparation_changed(self, *_):
+        self.preparation_generation += 1
+        self.sample_result = None
+        self.frame_view_mode.model().item(2).setEnabled(False)
+        self.to_sharpen_button.setEnabled(False)
+        if self.sender() is not self.keep_percent:
+            self.quality_plot.set_scores([])
+        with QSignalBlocker(self.frame_view_mode):
+            self.frame_view_mode.setCurrentIndex(1)
+        self.schedule_frame_preview()
+
+    def schedule_frame_preview(self, *_):
+        self.preview_generation += 1
+        if self.source_path and self.frame_view_mode.currentIndex() < 2:
+            self.preview_details.setText("Updating selected frame preview…")
+            self.preview_timer.start()
+
+    def update_frame_preview(self):
+        if not self.source_path or self.frame_view_mode.currentIndex() >= 2:
+            return
+        if self.preview_worker and self.preview_worker.isRunning():
+            self.preview_worker.cancel.set()
+            self.preview_timer.start()
+            return
+        generation = self.preview_generation
+        self.preview_worker = TaskWorker(
+            preview_frame, self.source_path, self.frame_slider.value(), self.options(),
+            prepared=self.frame_view_mode.currentIndex() == 1,
+        )
+        self.preview_worker.succeeded.connect(lambda result, g=generation: self.frame_preview_done(result, g))
+        self.preview_worker.failed.connect(lambda message, g=generation: self.frame_preview_error(message, g))
+        self.preview_worker.start()
+
+    def frame_preview_error(self, message, generation):
+        if generation == self.preview_generation and "cancelled" not in message.lower():
+            self.stack_view.clear_image()
+            self.preview_details.setText("Preview needs attention: " + message)
+
+    def frame_preview_done(self, preview, generation):
+        if generation != self.preview_generation or self.frame_view_mode.currentIndex() >= 2:
+            return
+        self.stack_view.set_image(preview.image, stretch=self.preview_brighten.isChecked())
+        if self.show_alignment.isChecked():
+            self.stack_view.set_markers(preview.points, preview.point_size)
+        h, w = preview.image.shape[:2]
+        note = "Original" if self.frame_view_mode.currentIndex() == 0 else "Prepared"
+        self.preview_details.setText(
+            f"{note} frame {preview.index + 1:,} of {self.source_info['count']:,} · {w} × {h}"
+            + (f" · {len(preview.points)} alignment points" if self.show_alignment.isChecked() else "")
+            + (" · grayscale AVI: choose a Bayer pattern for raw color" if self.source_info['gray_video']
+               and self.bayer_combo.currentText() == "AUTO" else "")
+        )
+        self.to_sharpen_button.setEnabled(False)
+
+    def view_changed(self, *_):
+        self.preview_generation += 1
+        mode = self.frame_view_mode.currentIndex()
+        if mode < 2:
+            self.to_sharpen_button.setEnabled(False)
+            self.schedule_frame_preview()
+            return
+        result = self.sample_result if mode == 2 else self.result
+        if result is None:
+            return
+        self.preview_timer.stop()
+        self.stack_view.set_image(result.image, stretch=self.preview_brighten.isChecked())
+        if self.show_alignment.isChecked():
+            points = [(x * result.options.scale, y * result.options.scale) for x, y in result.alignment_points]
+            self.stack_view.set_markers(points, result.options.alignment_size * result.options.scale)
+        self.quality_plot.set_scores(result.quality)
+        label = "Sample preview" if mode == 2 else "Full stack"
+        self.preview_details.setText(
+            f"{label} · {len(result.selected):,} of {result.input_frames:,} sampled frames selected"
+            if mode == 2 else f"Full stack · {len(result.selected):,} of {result.input_frames:,} frames selected"
+        )
+        if mode == 2:
+            self.preview_details.setText(self.preview_details.text() + " · approximate result, not the full recording")
+        elif asdict(result.options) != asdict(self.options()):
+            self.preview_details.setText(self.preview_details.text() + " · uses earlier settings")
+        self.to_sharpen_button.setEnabled(True)
+
+    def run_sample(self):
+        if self.source_path:
+            generation = self.preparation_generation
+            self.start_job(preview_sample, (self.source_path, self.options(), self.sample_count.value()),
+                           lambda result, g=generation: self.sample_done(result, g))
+
+    def sample_done(self, result, generation):
+        if generation != self.preparation_generation:
+            self.log("Settings changed during the sample. Preview the sample again with the current settings.")
+            return
+        self.sample_result = result
+        self.frame_view_mode.model().item(2).setEnabled(True)
+        self.frame_view_mode.setCurrentIndex(2)
+        self.view_changed()
+        self.log(f"Sample preview ready · {result.input_frames} frames spread across the recording")
+
+    def continue_to_sharpen(self):
+        mode = self.frame_view_mode.currentIndex()
+        result = self.sample_result if mode == 2 else self.result if mode == 3 else None
+        if result is not None:
+            self.set_sharpen_image(result.image, sample_indices=result.sample_indices)
+            self.sharpen_input_label.setText(
+                "Sample preview — approximate result" if result.sample_indices is not None else "Full recording stack"
+            )
+            self.nav.setCurrentRow(2)
 
     def pick_calibration(self, field):
         path, _ = QFileDialog.getOpenFileName(
@@ -608,6 +793,8 @@ class MainWindow(QMainWindow):
         self.job.failed.connect(self.job_error)
         self.job.finished.connect(self.job_finished)
         self.stack_button.setEnabled(False)
+        self.sample_button.setEnabled(False)
+        self.save_finished_button.setEnabled(False)
         self.batch_start.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.batch_cancel.setEnabled(True)
@@ -627,7 +814,9 @@ class MainWindow(QMainWindow):
             self.error(message)
 
     def job_finished(self):
-        self.stack_button.setEnabled(True)
+        self.stack_button.setEnabled(self.source_path is not None)
+        self.sample_button.setEnabled(self.source_path is not None)
+        self.save_finished_button.setEnabled(self.original is not None)
         self.batch_start.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.batch_cancel.setEnabled(False)
@@ -644,10 +833,12 @@ class MainWindow(QMainWindow):
 
     def stack_done(self, result):
         self.result = result
-        self.stack_view.set_image(result.image)
-        self.quality_plot.set_scores(result.quality)
+        self.frame_view_mode.model().item(3).setEnabled(True)
+        self.frame_view_mode.setCurrentIndex(3)
+        self.view_changed()
         self.save_stack_button.setEnabled(True)
         self.set_sharpen_image(result.image)
+        self.sharpen_input_label.setText("Full recording stack")
         self.log(
             f"Stack complete · {len(result.selected):,} of {result.input_frames:,} frames · {len(result.alignment_points)} local points"
         )
@@ -704,6 +895,9 @@ class MainWindow(QMainWindow):
         row.addStretch()
         row.addWidget(button("Reset adjustments", self.reset_sharpen))
         layout.addLayout(row)
+        self.sharpen_input_label = QLabel("Open an image or send a sample/full stack from Prepare & Stack.")
+        self.sharpen_input_label.setProperty("secondary", True)
+        layout.addWidget(self.sharpen_input_label)
         split = QSplitter()
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -761,14 +955,18 @@ class MainWindow(QMainWindow):
         ]:
             spin.valueChanged.connect(self.schedule_sharpen)
         self.rgb_alignment.toggled.connect(self.schedule_sharpen)
-        pl.addWidget(button("Export finished image…", self.save_finished, True))
-        pl.addWidget(button("Save sharpening preset…", self.save_preset))
-        pl.addWidget(button("Load sharpening preset…", self.load_preset))
         pl.addStretch()
         split.addWidget(left)
         split.addWidget(scroll_panel(panel))
         split.setStretchFactor(0, 1)
         layout.addWidget(split, 1)
+        actions = QHBoxLayout()
+        self.save_finished_button = button("Export finished image…", self.save_finished, True)
+        self.save_finished_button.setEnabled(False)
+        actions.addWidget(self.save_finished_button, 1)
+        actions.addWidget(button("Save sharpening preset…", self.save_preset))
+        actions.addWidget(button("Load sharpening preset…", self.load_preset))
+        layout.addLayout(actions)
         return page
 
     def finish_options(self):
@@ -790,11 +988,14 @@ class MainWindow(QMainWindow):
         if path:
             try:
                 self.set_sharpen_image(normalized(read_image(path)))
+                self.sharpen_input_label.setText(Path(path).name)
                 self.nav.setCurrentRow(2)
             except Exception as e:
                 self.error(str(e))
 
-    def set_sharpen_image(self, image):
+    def set_sharpen_image(self, image, sample_indices=None):
+        self.sharpen_sample_indices = sample_indices
+        self.save_finished_button.setEnabled(not (self.job and self.job.isRunning()))
         self.original = np.asarray(image, dtype=np.float32).copy()
         self.finished_image = self.original.copy()
         self.show_finished_preview()
@@ -899,7 +1100,8 @@ class MainWindow(QMainWindow):
             self.error("Stack a recording or open an image in Sharpen first.")
             return
         # Recompute with current settings so an export cannot race a pending preview.
-        path = self.image_save_path("planet-finished")
+        sample_indices = self.sharpen_sample_indices
+        path = self.image_save_path("planet-sample-preview" if sample_indices is not None else "planet-finished")
         if path:
             image, options = self.original.copy(), self.finish_options()
 
@@ -909,7 +1111,7 @@ class MainWindow(QMainWindow):
                     raise Cancelled("Export cancelled.")
                 write_image(path, result, overwrite=True)
                 Path(path + ".json").write_text(
-                    json.dumps({"sharpening": options}, indent=2), encoding="utf8"
+                    json.dumps({"sharpening": options, "sample_source_frame_indices": sample_indices}, indent=2), encoding="utf8"
                 )
                 return path
 
@@ -1144,6 +1346,9 @@ class MainWindow(QMainWindow):
             self.error(str(e))
 
     def load_project(self):
+        if self.job and self.job.isRunning():
+            self.error("Wait for processing to finish or cancel it before opening another project.")
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Open imaging project", "", "Planetary project (*.json)")
         if not path:
             return
@@ -1182,12 +1387,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.sharpen_timer.stop()
-        for worker in (self.job, self.scan_worker, self.sharpen_worker):
+        self.preview_timer.stop()
+        for worker in (self.job, self.scan_worker, self.sharpen_worker, self.preview_worker):
             if worker and worker.isRunning():
                 worker.cancel.set()
         if self.camera_worker and self.camera_worker.isRunning():
             self.camera_worker.stop_event.set()
-        for worker in (self.camera_worker, self.job, self.scan_worker, self.sharpen_worker):
+        for worker in (self.camera_worker, self.job, self.scan_worker, self.sharpen_worker, self.preview_worker):
             if worker and worker.isRunning() and not worker.wait(12000):
                 self.log("Finishing camera or processing cleanup. Try closing again in a moment.")
                 event.ignore()

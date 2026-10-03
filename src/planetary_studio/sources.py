@@ -36,7 +36,8 @@ class ImageSequence:
 
 class VideoSource:
     def __init__(self, path):
-        self._cap = cv2.VideoCapture(str(path))
+        self.path = str(path)
+        self._cap = cv2.VideoCapture(self.path)
         if not self._cap.isOpened():
             raise ValueError("Cannot decode video. Use SER, AVI, MOV, MP4, or an image sequence.")
         self.count = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -44,6 +45,7 @@ class VideoSource:
             self._cap.release()
             raise ValueError("Video has no readable frame count; convert it to SER or AVI first.")
         self.bits, self.pattern, self._next = 8, "RGB", 0
+        self.fps = float(self._cap.get(cv2.CAP_PROP_FPS))
 
     def read(self, index):
         if not 0 <= index < self.count:
@@ -52,12 +54,42 @@ class VideoSource:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, index)
         ok, frame = self._cap.read()
         if not ok:
+            # Some AVI decoders cannot seek back to the first frame reliably.
+            # Reopen and decode forward when their seek did not return a frame.
+            self._cap.release()
+            self._cap = cv2.VideoCapture(self.path)
+            for _ in range(index + 1):
+                ok, frame = self._cap.read()
+                if not ok:
+                    break
+        if not ok:
             raise ValueError(f"Cannot decode video frame {index + 1}.")
         self._next = index + 1
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     def close(self):
         self._cap.release()
+
+
+class IndexedSource:
+    """Expose a small set of original frames without decoding the full recording."""
+
+    def __init__(self, source, indices):
+        self.source = source
+        self.indices = list(indices)
+        if not self.indices or any(not 0 <= i < source.count for i in self.indices):
+            raise ValueError("Preview frame indices must be inside the recording.")
+        if self.indices != sorted(set(self.indices)):
+            raise ValueError("Preview frame indices must be unique and in order.")
+        self.count, self.bits, self.pattern = len(self.indices), source.bits, source.pattern
+
+    def read(self, index):
+        if not 0 <= index < self.count:
+            raise IndexError(index)
+        return self.source.read(self.indices[index])
+
+    def close(self):
+        self.source.close()
 
 
 def open_source(path):

@@ -11,6 +11,7 @@ from .cameras.simulator import planet_image
 from .ser import SerWriter, SerReader
 from .imaging import read_image, normalized, write_image
 from .processing import StackOptions, stack_source, finish_image
+from .preview import preview_frame, preview_sample
 
 
 def generate_demo(path, frames=60, width=256, height=192):
@@ -45,6 +46,12 @@ def run_self_test(report_path=None):
         assert result.image.shape == truth.shape and np.isfinite(result.image).all()
         assert len(result.selected) == 12 and len(result.alignment_points) > 0
         checks.append("Quality ranking, registration, local alignment, stacking")
+        frame = preview_frame(path, 3, StackOptions(crop_width=64, crop_height=64))
+        assert frame.image.shape == (64, 64, 3)
+        sample = preview_sample(path, StackOptions(keep_percent=50, alignment_size=32), 8)
+        assert sample.input_frames == 8 and len(sample.sample_indices) == 8
+        assert len(sample.selected) == 4
+        checks.append("Selected-frame settings preview and limited sample stacking")
         finished = finish_image(result.image, gains=(0.4, 0.2, 0.1, 0, 0, 0), rl_iterations=2)
         assert finished.min() >= 0 and finished.max() <= 1
         checks.append("Wavelet sharpening and deconvolution")
@@ -56,10 +63,16 @@ def run_self_test(report_path=None):
             assert np.max(np.abs(restored - finished)) < 4e-5
         checks.append("16-bit TIFF/PNG and float FITS exports")
         from PySide6.QtWidgets import QApplication
-        from .app import MainWindow
+        from . import app as desktop
+        from PySide6.QtCore import QSettings
 
         app = QApplication.instance() or QApplication([])
-        window = MainWindow()
+        original_settings = desktop.QSettings
+        desktop.QSettings = lambda *_: QSettings(str(directory / "settings.ini"), QSettings.IniFormat)
+        try:
+            window = desktop.MainWindow()
+        finally:
+            desktop.QSettings = original_settings
         assert not window.windowIcon().isNull()
         from .cameras.simulator import SimulatedCamera
 

@@ -18,7 +18,26 @@ class ImageView(QGraphicsView):
         self.message.setDefaultTextColor(self.palette().color(QPalette.PlaceholderText))
         self.fit = True
         self.image = None
+        self.markers = []
         self.setMinimumSize(320, 240)
+
+    def clear_image(self):
+        self.image = None
+        self.item.setPixmap(QPixmap())
+        self.set_markers([], 0)
+        self.message.show()
+        self.resetTransform()
+        self.fit = True
+        self.scene.setSceneRect(self.message.boundingRect())
+
+    def set_markers(self, points, size):
+        for marker in self.markers:
+            self.scene.removeItem(marker)
+        self.markers = []
+        pen = QPen(QColor("#76a783"), 1)
+        pen.setCosmetic(True)
+        for x, y in points:
+            self.markers.append(self.scene.addRect(x - size / 2, y - size / 2, size, size, pen))
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -28,6 +47,7 @@ class ImageView(QGraphicsView):
             self.viewport().update()
 
     def set_image(self, image, stretch=False):
+        self.set_markers([], 0)
         self.image = image
         pixels = preview_pixels(image, stretch)
         h, w = pixels.shape[:2]
@@ -113,11 +133,17 @@ class QualityPlot(QWidget):
     def __init__(self):
         super().__init__()
         self.scores = np.array([])
-        self.setMinimumHeight(120)
-        self.setMaximumHeight(160)
+        self.keep_percent = 25.0
+        self.setMinimumHeight(145)
+        self.setMaximumHeight(165)
+        self.setToolTip("Quality is relative to the best frame in this recording or preview sample. Frames are ranked best to worst.")
 
     def set_scores(self, scores):
         self.scores = np.sort(scores)[::-1]
+        self.update()
+
+    def set_keep_percent(self, value):
+        self.keep_percent = float(value)
         self.update()
 
     def paintEvent(self, event):
@@ -125,7 +151,25 @@ class QualityPlot(QWidget):
         p.fillRect(self.rect(), self.palette().color(QPalette.Base))
         p.setPen(self.palette().color(QPalette.PlaceholderText))
         p.drawText(10, 20, "Frame quality · best → worst")
+        left, top, width, height = 42, 30, max(1, self.width() - 58), max(1, self.height() - 64)
+        grid = self.palette().color(QPalette.PlaceholderText)
+        grid.setAlpha(65)
+        for tick in range(5):
+            x, y = left + width * tick / 4, top + height * tick / 4
+            p.setPen(QPen(grid, 1))
+            p.drawLine(int(x), top, int(x), top + height)
+            p.drawLine(left, int(y), left + width, int(y))
+            p.setPen(self.palette().color(QPalette.PlaceholderText))
+            p.drawText(int(x) - 16, top + height + 17, f"{tick * 25}%")
+            p.drawText(4, int(y) + 4, f"{100 - tick * 25}%")
+        if self.scores.size:
+            selected = self.palette().color(QPalette.Highlight)
+            selected.setAlpha(65)
+            p.fillRect(left, top, round(width * self.keep_percent / 100), height, selected)
+        p.setPen(self.palette().color(QPalette.PlaceholderText))
+        p.drawText(left, self.height() - 3, "Ranked frames (%) · quality relative to best (%)")
         if not len(self.scores):
+            p.drawText(left + 8, top + height // 2, "Preview a sample or stack to assess quality")
             return
         p.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
@@ -133,9 +177,14 @@ class QualityPlot(QWidget):
         sampled = self.scores[:: max(1, len(self.scores) // 500)]
         for i, score in enumerate(sampled):
             x, y = (
-                10 + i * (self.width() - 20) / max(1, len(sampled) - 1),
-                self.height() - 10 - score / maximum * (self.height() - 40),
+                left + i * width / max(1, len(sampled) - 1),
+                top + height * (1 - score / maximum),
             )
             path.moveTo(x, y) if i == 0 else path.lineTo(x, y)
         p.setPen(QPen(self.palette().color(QPalette.Text), 2))
         p.drawPath(path)
+        cutoff = left + width * self.keep_percent / 100
+        p.setPen(QPen(self.palette().color(QPalette.Text), 1, Qt.DashLine))
+        p.drawLine(int(cutoff), top, int(cutoff), top + height)
+        p.drawText(max(left, min(int(cutoff) + 6, left + width - 110)), top + 16,
+                   f"Keep {self.keep_percent:g}%")

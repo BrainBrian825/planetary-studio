@@ -10,10 +10,16 @@ The byte order behavior follows the [SER Player reference reader](https://github
 
 ## Other inputs
 
-Video decoding is provided by the packaged OpenCV/FFmpeg backend. AVI, MOV, MP4, and MKV work when their codecs are available. Processing requires a readable frame count and supports random seeks. Use lossless SER for raw astronomy capture; compressed videos may contain prior color conversion and quantization.
+Video decoding is provided by the packaged OpenCV/FFmpeg backend. AVI, MOV, MP4, and MKV work when their codecs are available. Processing requires a readable frame count and supports random seeks, with a decode-forward fallback when an AVI seek fails. Use lossless SER for raw astronomy capture; compressed videos may contain prior color conversion and quantization.
 
 TIFF, PNG, FITS, JPEG, and BMP image sequences are naturally sorted (`frame2` precedes `frame10`). All frames must have the same shape. FITS unsigned integer scaling is handled by Astropy, color planes are converted to RGB, and big-endian FITS data is converted to native endian before image operations. Float FITS processing/calibration inputs are expected to be normalized to 0–1; arbitrary astronomical ADU float images need normalization before import.
 
 ## Outputs
 
 Stack and finished exports are 16-bit TIFF, 16-bit PNG, or float32 FITS. Output pixels are clipped to 0–1; monitor previews are 8-bit and do not change stored processing pixels. The JSON companion records processing parameters, frame quality, selected frames, global shifts, and alignment point positions. Prepared SER exports are debayered and calibrated 16-bit RGB/mono; capture SER preserves original raw pixels.
+
+## Raw AVI preview
+
+Some raw 8-bit AVI recordings decode as three identical gray channels. Explicit Bayer selection now recovers that mosaic before debayering; it is rejected for already converted color frames. AVI may not identify the sensor pattern. Use the prepared-frame preview to select it manually. Capture SER includes a Bayer tag and is the preferred raw format.
+
+A sample preview only reads the evenly spaced requested subset. Its report records those source-frame indices. The full stack remains a separate result; sample previews do not replace it or enable full-stack export.

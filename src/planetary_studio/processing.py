@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from scipy.ndimage import gaussian_filter, median_filter
 from .imaging import normalized, debayer, luminance, write_image, read_image
-from .sources import open_source
+from .sources import open_source, IndexedSource
 from .ser import SerWriter
 
 
@@ -57,6 +57,7 @@ class StackResult:
     alignment_points: list[tuple[int, int]]
     input_frames: int
     options: StackOptions
+    sample_indices: list[int] | None = None
 
     def save(self, path, overwrite=False):
         path = Path(path)
@@ -74,6 +75,7 @@ class StackResult:
                     "shifts_xy": self.shifts,
                     "alignment_points_xy": self.alignment_points,
                     "options": asdict(self.options),
+                    "sample_source_frame_indices": self.sample_indices,
                     "output_scale": "Lanczos resampling (not drizzle)"
                     if self.options.scale != 1
                     else "native",
@@ -145,6 +147,12 @@ class Preprocessor:
 
     def read(self, index):
         raw = self.source.read(index)
+        if self.pattern in ("RGGB", "GRBG", "GBRG", "BGGR") and raw.ndim == 3:
+            # Video decoders expand raw grayscale AVI samples into three equal
+            # channels. Recover the original mosaic before calibration/debayering.
+            if not (np.array_equal(raw[..., 0], raw[..., 1]) and np.array_equal(raw[..., 1], raw[..., 2])):
+                raise ValueError("This frame already contains color. Choose AUTO instead of a Bayer pattern.")
+            raw = raw[..., 0]
         image = normalized(raw, self.bits)
         for name, master in (("Dark", self.dark), ("Flat", self.flat)):
             if master is not None and master.shape != raw.shape:
@@ -204,7 +212,8 @@ def alignment_points(reference, size):
     return result
 
 
-def stack_source(path, options: StackOptions | None = None, progress=None, cancel=None) -> StackResult:
+def stack_source(path, options: StackOptions | None = None, progress=None, cancel=None,
+                 frame_indices=None) -> StackResult:
     options = options or StackOptions()
     options.validate()
     progress = progress or (lambda *_: None)
@@ -216,6 +225,8 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
 
     source = open_source(path)
     try:
+        if frame_indices is not None:
+            source = IndexedSource(source, frame_indices)
         prep = Preprocessor(source, options)
         n = source.count
         scores = np.zeros(n, np.float32)
@@ -328,7 +339,8 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
             )
             result = np.clip(result, 0, 1)
         progress(100, f"Stacked {len(selected)} of {n} frames")
-        return StackResult(result, scores, selected, shifts, points, n, options)
+        return StackResult(result, scores, selected, shifts, points, n, options,
+                           list(frame_indices) if frame_indices is not None else None)
     finally:
         source.close()
 

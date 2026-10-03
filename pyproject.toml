@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "planetary-studio"
-version = "0.2.0"
+version = "0.3.0"
 description = "Capture, prepare, stack, and sharpen planetary images in one desktop application"
 readme = "README.md"
 requires-python = ">=3.12"

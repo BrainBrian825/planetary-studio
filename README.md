@@ -5,7 +5,7 @@ Built for macOS Apple silicon, Windows x64, and Linux x64/arm64.
 
 ![Planetary Studio dark appearance with separate camera controls](docs/images/dark-capture.png)
 
-Planetary Studio brings the core tasks normally performed in oaCapture, PIPP, AutoStakkert, and waveSharp into one open application. Version 0.2 is a **prerelease** with an implemented end-to-end workflow. It is not yet a feature-for-feature or image-quality equivalent of those mature applications. The algorithm and hardware limits are documented rather than hidden behind compatibility claims.
+Planetary Studio brings the core tasks normally performed in oaCapture, PIPP, AutoStakkert, and waveSharp into one open application. Version 0.3 is a **prerelease** with an implemented end-to-end workflow. It is not yet a feature-for-feature or image-quality equivalent of those mature applications. The algorithm and hardware limits are documented rather than hidden behind compatibility claims.
 
 ## Download
 
@@ -36,6 +36,18 @@ Exposure and gain use sliders with exact-value fields. Exposure sliders use a lo
 
 Projects save source paths and processing settings as readable JSON. Outputs include processing reports so the selected frames and settings can be inspected later. Original recordings are not modified.
 
+## Preview before processing the full recording
+
+![Sample stack preview with alignment points and a gridded quality graph](docs/images/settings-preview.png)
+
+The **Prepared frame** view updates as you change Bayer pattern, centering, calibration, hot-pixel removal, crop dimensions, or output size. Use the frame slider to check another point in the recording, or switch to **Original frame** for comparison. Frame numbers and preview dimensions are displayed. **Brighten preview** affects display only; saved pixels keep their actual brightness.
+
+Use **Preview sample** to stack 2–64 evenly spaced frames (12 by default) with the current settings. The result is labeled as an approximate sample. Send it to **Sharpen** to tune the finishing settings, then run **Stack all frames** for the final image. A sample is not a full assessment of atmospheric seeing and can select different frames from the full recording.
+
+The quality graph has percentage grid lines, relative quality labels, and a **Keep best** cutoff marker. **Show alignment points in preview** overlays the planned patch areas without changing image pixels. The main stack/export/sharpen actions remain visible below the settings panel.
+
+Raw grayscale AVI files may contain Bayer samples without a pattern tag. Select the appropriate Bayer pattern and compare its preview; AUTO cannot determine the camera or any recording flips from an untagged file. Already converted color images should use AUTO.
+
 ## Cameras
 
 | Connection | Platforms | Capabilities | Validation |
@@ -56,7 +68,7 @@ Projects save source paths and processing settings as readable JSON. Outputs inc
 - SER files are memory mapped. Processing reads frames in passes instead of retaining the complete recording in RAM. Quality metadata is proportional to frame count × alignment point count. Video seeking and raw disk bandwidth still affect speed.
 - Global alignment uses phase correlation and a reference built from the best frames. Local points use overlapping feathered patches and independent frame ranking. Texture-free areas fall back to the global stack.
 - Quality is gradient energy after mild noise smoothing. Extremely noisy or saturated data can still affect rankings. Exposure normalization is optional.
-- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented in 0.2.**
+- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented in 0.3.**
 - The engine is independently implemented; it does not contain AutoStakkert or waveSharp code. There has been no claim of numerical equivalence to their algorithms.
 
 ## Build or run from source
