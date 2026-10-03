@@ -444,6 +444,8 @@ def finish_image(
     saturation=1.0,
     balance=(1.0, 1.0, 1.0),
     align_rgb=False,
+    ai_denoise_amount=0.0,
+    ai_denoise_noise=3.0,
 ):
     if not 0.1 <= gamma <= 5 or not 0 <= saturation <= 3 or len(balance) != 3:
         raise ValueError("Invalid color adjustment settings.")
@@ -451,6 +453,10 @@ def finish_image(
     out = wavelet_sharpen(out, gains, denoise)
     if rl_iterations:
         out = richardson_lucy(out, rl_sigma, rl_iterations)
+    if ai_denoise_amount:
+        from .ai_denoise import denoise_image
+
+        out = denoise_image(out, amount=ai_denoise_amount, noise_level=ai_denoise_noise)
     if out.ndim == 3:
         out *= np.asarray(balance, np.float32)
         gray = luminance(out)[..., None]

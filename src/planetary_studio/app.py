@@ -919,7 +919,7 @@ class MainWindow(QMainWindow):
     def build_sharpen(self):
         page, layout = page_layout(
             "Bring out the detail",
-            "Six wavelet layers, noise control, deconvolution, and color adjustments. Export a 16-bit image or floating-point FITS.",
+            "Wavelet detail, deconvolution, optional AI noise cleanup, and color adjustments. Export a 16-bit image or floating-point FITS.",
         )
         row = QHBoxLayout()
         row.addWidget(button("Open stacked image…", self.pick_sharpen))
@@ -955,6 +955,9 @@ class MainWindow(QMainWindow):
             form.addRow(label, spin)
         self.denoise_spin = number(0, 0.1, 0.003, 4)
         self.denoise_spin.setSingleStep(0.001)
+        self.denoise_spin.setToolTip(
+            "Suppresses small wavelet details before sharpening. A high value can remove most of the sharpening effect."
+        )
         form.addRow("Noise threshold", self.denoise_spin)
         wavelets.layout().addLayout(form)
         pl.addWidget(wavelets)
@@ -966,6 +969,27 @@ class MainWindow(QMainWindow):
         form.addRow("Blur radius", self.rl_sigma)
         deconv.layout().addLayout(form)
         pl.addWidget(deconv)
+        ai_cleanup = group("AI noise cleanup · FFDNet")
+        hint = QLabel("Applied after sharpening. Strength 0 turns it off. Runs on your computer.")
+        hint.setWordWrap(True)
+        hint.setProperty("secondary", True)
+        ai_cleanup.layout().addWidget(hint)
+        form = QFormLayout()
+        self.ai_denoise_amount = SliderControl(0, 100, 0, "AI denoise strength")
+        self.ai_denoise_amount.spin.setSuffix(" %")
+        self.ai_denoise_amount.setToolTip(
+            "Blends noise cleanup into the sharpened image. Start low and compare fine detail with strength 0."
+        )
+        self.ai_denoise_noise = SliderControl(0, 50, 3, "AI noise level")
+        self.ai_denoise_noise.setToolTip(
+            "How much grain the model should remove. Increase gradually; high levels can soften fine detail."
+        )
+        form.addRow("Strength", self.ai_denoise_amount)
+        form.addRow("Noise level", self.ai_denoise_noise)
+        ai_cleanup.layout().addLayout(form)
+        pl.addWidget(ai_cleanup)
+        self.ai_denoise_amount.valueChanged.connect(self.schedule_sharpen)
+        self.ai_denoise_noise.valueChanged.connect(self.schedule_sharpen)
         color = group("Color & tone")
         form = QFormLayout()
         self.gamma_spin = number(0.1, 5, 1)
@@ -1013,6 +1037,8 @@ class MainWindow(QMainWindow):
             "saturation": self.saturation_spin.value(),
             "balance": [s.value() for s in self.balance_spins],
             "align_rgb": self.rgb_alignment.isChecked(),
+            "ai_denoise_amount": self.ai_denoise_amount.spin.value() / 100,
+            "ai_denoise_noise": self.ai_denoise_noise.spin.value(),
         }
 
     def pick_sharpen(self):
@@ -1093,6 +1119,9 @@ class MainWindow(QMainWindow):
         for spin, value in zip(self.balance_spins, values.get("balance", [1] * 3)):
             spin.setValue(float(value))
         self.rgb_alignment.setChecked(bool(values.get("align_rgb", False)))
+        self.ai_denoise_amount.set_value(float(values.get("ai_denoise_amount", 0)) * 100)
+        self.ai_denoise_noise.set_value(float(values.get("ai_denoise_noise", 3)))
+        self.schedule_sharpen()
 
     def save_preset(self):
         path = self.save_file(

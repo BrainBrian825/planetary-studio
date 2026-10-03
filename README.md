@@ -5,7 +5,7 @@ Built for macOS Apple silicon, Windows x64, and Linux x64/arm64.
 
 ![Planetary Studio dark appearance with separate camera controls](docs/images/dark-capture.png)
 
-Planetary Studio brings the core tasks normally performed in oaCapture, PIPP, AutoStakkert, and waveSharp into one open application. Version 0.3 is a **prerelease** with an implemented end-to-end workflow. It is not yet a feature-for-feature or image-quality equivalent of those mature applications. The algorithm and hardware limits are documented rather than hidden behind compatibility claims.
+Planetary Studio brings the core tasks normally performed in oaCapture, PIPP, AutoStakkert, and waveSharp into one open application. Version 0.4 is a **prerelease** with an implemented end-to-end workflow. It is not yet a feature-for-feature or image-quality equivalent of those mature applications. The algorithm and hardware limits are documented rather than hidden behind compatibility claims.
 
 ## Download
 
@@ -31,10 +31,18 @@ Exposure and gain use sliders with exact-value fields. Exposure sliders use a lo
 
 1. **Capture:** scan cameras, connect, choose a sensor mode, start preview, and record SER. The simulator lets you practice without hardware. Capture includes live histogram, exposure/gain controls when offered by the driver, snapshots, recording time limits, frame counters, and driver-reported dropped frames. Raw Bayer data remains raw in the recording.
 2. **Prepare & Stack:** open SER, common videos, or naturally sorted TIFF/FITS/PNG image sequences. Choose object centering for planets or surface alignment for the Moon/Sun. Apply dark/flat calibration, remove isolated hot pixels, crop, and optionally normalize brightness. Export prepared SER or create a calibration master. Rank image detail, select a percentage of the best frames, register motion at subpixel resolution, and combine frames with overlapping local alignment points and local quality selection.
-3. **Sharpen:** use six wavelet scales, soft noise thresholds, Richardson–Lucy deconvolution, RGB alignment, channel balance, saturation, and gamma. Compare against the original and save presets. Export 16-bit TIFF/PNG or floating-point FITS.
+3. **Sharpen:** use six wavelet scales, soft noise thresholds, Richardson–Lucy deconvolution, optional AI noise cleanup, RGB alignment, channel balance, saturation, and gamma. Compare against the original and save presets. Export 16-bit TIFF/PNG or floating-point FITS.
 4. **Batch Queue:** process multiple recordings using the current preparation, stacking, and sharpening settings. The queue creates distinct outputs and reports failures individually.
 
 Projects save source paths and processing settings as readable JSON. Outputs include processing reports so the selected frames and settings can be inspected later. Original recordings are not modified.
+
+## AI cleanup after sharpening
+
+In **Sharpen → AI noise cleanup**, increase **Strength** from 0 to blend in FFDNet denoising. **Noise level** controls how much grain the model expects; start at 3 and increase gradually. Compare fine detail at Strength 0 before exporting. Strong settings can soften small features, and the model was trained on general photographs rather than planetary stacks.
+
+Cleanup runs **after wavelets and deconvolution, before color and gamma adjustments**. Both monochrome and RGB models are included in the download. It runs locally on the CPU, needs no additional downloads or GPU, and does not upload images. It retains floating-point pixels through processing and supports 16-bit/float exports. Cleanup is off by default; old projects and presets keep it off. New presets, projects, batch processing, and export reports include the selected settings.
+
+[Model provenance, licenses, validation, and integration details](docs/ai-denoising.md).
 
 ## Preview before processing the full recording
 
@@ -70,7 +78,7 @@ All file pickers start in the last folder you selected in the app, and remember 
 - SER files are memory mapped. Processing reads frames in passes instead of retaining the complete recording in RAM. Quality metadata is proportional to frame count × alignment point count. Video seeking and raw disk bandwidth still affect speed.
 - Global alignment uses phase correlation and a reference built from the best frames. Local points use overlapping feathered patches and independent frame ranking. Texture-free areas fall back to the global stack.
 - Quality is gradient energy after mild noise smoothing. Extremely noisy or saturated data can still affect rankings. Exposure normalization is optional.
-- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented in 0.3.**
+- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented in 0.4.**
 - The engine is independently implemented; it does not contain AutoStakkert or waveSharp code. There has been no claim of numerical equivalence to their algorithms.
 
 ## Build or run from source

@@ -55,6 +55,17 @@ def run_self_test(report_path=None):
         finished = finish_image(result.image, gains=(0.4, 0.2, 0.1, 0, 0, 0), rl_iterations=2)
         assert finished.min() >= 0 and finished.max() <= 1
         checks.append("Wavelet sharpening and deconvolution")
+        from .ai_denoise import denoise_image
+
+        for mono in (False, True):
+            reference = truth[..., 1] if mono else truth
+            noisy = np.clip(reference + np.random.default_rng(42).normal(0, 6 / 255, reference.shape), 0, 1)
+            cleaned = denoise_image(noisy, amount=1, noise_level=6)
+            assert cleaned.shape == reference.shape and np.isfinite(cleaned).all()
+            assert np.mean((cleaned - reference) ** 2) < np.mean((noisy - reference) ** 2) * 0.2
+        finished = finish_image(result.image, gains=(0.4, 0.2, 0.1, 0, 0, 0),
+                                rl_iterations=2, ai_denoise_amount=0.3, ai_denoise_noise=3)
+        checks.append("Bundled color/mono FFDNet inference, known-reference noise reduction, post-sharpen cleanup")
         for ext in ("tif", "png", "fits"):
             output = directory / ("result." + ext)
             write_image(output, finished)

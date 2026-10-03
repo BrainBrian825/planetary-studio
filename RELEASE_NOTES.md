@@ -1,4 +1,16 @@
-Planetary Studio 0.3.1 adds previews before full-recording processing, improves real AVI handling, and fixes file dialog behavior.
+Planetary Studio 0.4.0 adds optional local AI denoising after sharpening.
+
+- Bundled MIT-licensed FFDNet color and monochrome models clean up noise after wavelets and deconvolution, before color/tone adjustments.
+- Strength and Noise level each have a slider and an exact-value field. Strength 0 disables cleanup; cleanup is off by default and stays off for old presets/projects.
+- Live previews, presets, project settings, batch jobs, and export reports use the same cleanup settings. Processing keeps float precision and supports 16-bit TIFF/PNG or float FITS.
+- Models run locally on the CPU with no separate downloads, GPU, or image uploads. Approximately 5.3 MB of model data is included with provenance and the upstream license.
+- Context around processing tiles prevents seams and supports odd image dimensions. Concurrent jobs cannot mix model inputs.
+- Each source and packaged-platform self-test executes both models and verifies noise reduction against a known synthetic reference.
+- A tooltip explains how the wavelet Noise threshold can suppress sharpening. This threshold is separate from post-sharpen AI cleanup.
+
+FFDNet is trained on general photographs. Start with low strength and compare fine planetary detail. It may soften real features and cannot repair excessive sharpening halos or recover detail absent from the source.
+
+Previous features remain available:
 
 - Every file picker starts in the last folder selected anywhere in the app, including opening recordings, image exports, presets, projects, calibration files, camera libraries, and queue folders. The folder also survives restarts; a removed folder falls back to Downloads or the home folder.
 - Accepting Replace in a save dialog now works for SER recordings, prepared SER exports, and calibration masters. Image exports also honor replacement. When adding a missing extension leads to an existing file, a replacement confirmation appears for that final filename.

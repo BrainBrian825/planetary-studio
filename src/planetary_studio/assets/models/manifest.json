@@ -1,0 +1,24 @@
+{
+  "model": "FFDNet",
+  "upstream": "https://github.com/cszn/KAIR",
+  "source_commit": "fc1732f4a4514e42ce15e5b3a1e18c828af47a1e",
+  "license": "MIT",
+  "variants": {
+    "color": {
+      "weights_url": "https://github.com/cszn/KAIR/releases/download/v1.0/ffdnet_color_clip.pth",
+      "weights_sha256": "99a5081e32afdaa25df3ded11aa16447556692e550906caed320db31324af5ce",
+      "file": "ffdnet_color_clip.onnx",
+      "sha256": "3bf652b12fdbcd885483e6b8348eea168f8e9c5bc6bf1be46d5be0905fe1f845",
+      "channels": 3,
+      "convolutions": 12
+    },
+    "gray": {
+      "weights_url": "https://github.com/cszn/KAIR/releases/download/v1.0/ffdnet_gray_clip.pth",
+      "weights_sha256": "0b254d45dafc1ed04729b2206e0c09e5cc1e477e1d094e5a876ea45a34e5d84c",
+      "file": "ffdnet_gray_clip.onnx",
+      "sha256": "9d222f2bb47ee26a9d604f48c9d9021b398bcc7ab65a78f1bd66d19c1f8cb095",
+      "channels": 1,
+      "convolutions": 15
+    }
+  }
+}

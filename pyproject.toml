@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "planetary-studio"
-version = "0.3.1"
+version = "0.4.0"
 description = "Capture, prepare, stack, and sharpen planetary images in one desktop application"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,7 +25,7 @@ planetary-studio = "planetary_studio.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-planetary_studio = ["native/*", "assets/*"]
+planetary_studio = ["native/*", "assets/*", "assets/models/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

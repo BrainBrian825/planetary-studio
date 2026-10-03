@@ -1,15 +1,17 @@
+import json
 import os
 import time
-import json
+
 import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
+
 from planetary_studio.app import MainWindow
-from planetary_studio.cameras.simulator import discover, SimulatedCamera
-from planetary_studio.workers import CameraWorker
+from planetary_studio.cameras.simulator import SimulatedCamera, discover
 from planetary_studio.ser import SerReader
+from planetary_studio.workers import CameraWorker
 
 
 def app_instance():
@@ -34,6 +36,72 @@ def test_desktop_workflow_and_shutdown():
     assert window.finish_options()["gains"][0] == 0.5
     window.close()
     app.processEvents()
+
+
+def test_ai_cleanup_controls_round_trip_and_old_presets_disable_cleanup():
+    app = app_instance()
+    window = MainWindow()
+    try:
+        assert window.finish_options()["ai_denoise_amount"] == 0
+        window.ai_denoise_amount.slider.setValue(35)
+        window.ai_denoise_noise.slider.setValue(4)
+        options = window.finish_options()
+        assert options["ai_denoise_amount"] == 0.35 and options["ai_denoise_noise"] == 4
+        window.reset_sharpen()
+        assert window.finish_options()["ai_denoise_amount"] == 0
+        window.apply_finish_options(options)
+        assert window.finish_options() == options
+        window.apply_finish_options({"gains": [0.5, 0, 0, 0, 0, 0]})
+        assert window.finish_options()["ai_denoise_amount"] == 0
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_live_ai_preview_matches_finished_export_and_preset(tmp_path, monkeypatch):
+    from planetary_studio.cameras.simulator import planet_image
+    from planetary_studio.imaging import normalized, read_image
+    from planetary_studio.processing import finish_image
+
+    app = app_instance()
+    window = MainWindow()
+    try:
+        image = planet_image(80, 64).astype(np.float32)
+        image += np.random.default_rng(47).normal(0, 0.015, image.shape).astype(np.float32)
+        window.set_sharpen_image(image)
+        window.wavelet_spins[0].setValue(0.8)
+        window.ai_denoise_amount.slider.setValue(40)
+        window.ai_denoise_noise.slider.setValue(5)
+        options = window.finish_options()
+        expected = finish_image(image, **options)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not np.allclose(window.finished_image, expected, atol=1e-7):
+            app.processEvents()
+            time.sleep(0.01)
+        assert np.allclose(window.finished_image, expected, atol=1e-7)
+
+        preset = tmp_path / "cleanup.json"
+        monkeypatch.setattr(window, "save_file", lambda *_: str(preset))
+        window.save_preset()
+        window.reset_sharpen()
+        monkeypatch.setattr(window, "open_file", lambda *_: str(preset))
+        window.load_preset()
+        assert window.finish_options() == options
+
+        output = tmp_path / "finished.tif"
+        monkeypatch.setattr(window, "image_save_path", lambda *_: str(output))
+        window.save_finished()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (window.job and window.job.isRunning()):
+            app.processEvents()
+            time.sleep(0.01)
+        app.processEvents()
+        assert output.is_file()
+        assert np.max(np.abs(normalized(read_image(output)) - expected)) < 2e-5
+        assert json.loads((tmp_path / "finished.tif.json").read_text())["sharpening"] == options
+    finally:
+        window.close()
+        app.processEvents()
 
 
 @pytest.mark.parametrize("replace", [False, True])

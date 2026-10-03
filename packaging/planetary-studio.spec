@@ -17,6 +17,7 @@ for distribution in distributions():
                 license_data.append((str(source), 'licenses/dependencies/' + distribution.metadata['Name'] + '/' + str(file.parent)))
 a = Analysis([str(root / 'packaging/entry.py')], pathex=[str(root / 'src')], binaries=binaries,
     datas=[(str(assets / 'planetary-studio.png'), 'planetary_studio/assets'),
+           (str(assets / 'models'), 'planetary_studio/assets/models'),
            (str(root / 'LICENSE'), 'licenses'), (str(root / 'THIRD_PARTY.md'), 'licenses'),
            (str(root / 'native/vendor/libuvc/LICENSE.txt'), 'licenses/libuvc'),
            (str(root / 'native/vendor/licenses/libusb-LGPL-2.1.txt'), 'licenses/libusb'), *license_data],
