@@ -1,4 +1,4 @@
-Planetary Studio 0.4.0 adds optional local AI denoising after sharpening.
+Planetary Studio 0.4.1 adds optional local AI denoising after sharpening.
 
 - Bundled MIT-licensed FFDNet color and monochrome models clean up noise after wavelets and deconvolution, before color/tone adjustments.
 - Strength and Noise level each have a slider and an exact-value field. Strength 0 disables cleanup; cleanup is off by default and stays off for old presets/projects.
