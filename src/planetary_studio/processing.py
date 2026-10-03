@@ -345,14 +345,23 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
         source.close()
 
 
-def export_prepared(path, output, options=None, progress=None, cancel=None):
+def protect_source_output(source, output):
+    paths = source.paths if hasattr(source, "paths") else [source.path]
+    destination = Path(output).resolve()
+    if any(Path(path).resolve() == destination for path in paths):
+        raise ValueError("Choose a different output file to preserve the source recording or images.")
+
+
+def export_prepared(path, output, options=None, progress=None, cancel=None, *, overwrite=False):
     options = options or StackOptions()
     options.validate()
     source = open_source(path)
     try:
+        protect_source_output(source, output)
         prep = Preprocessor(source, options)
         first = prep.read(0)
-        with SerWriter(output, first.shape, 16, "RGB" if first.ndim == 3 else "MONO") as writer:
+        with SerWriter(output, first.shape, 16, "RGB" if first.ndim == 3 else "MONO",
+                       overwrite=overwrite) as writer:
             for i in range(source.count):
                 if cancel and cancel.is_set():
                     raise Cancelled("Export cancelled; partial recording has been finalized.")
@@ -364,9 +373,10 @@ def export_prepared(path, output, options=None, progress=None, cancel=None):
         source.close()
 
 
-def create_master(path, output, progress=None, cancel=None):
+def create_master(path, output, progress=None, cancel=None, *, overwrite=False):
     source = open_source(path)
     try:
+        protect_source_output(source, output)
         total = normalized(source.read(0), source.bits).astype(np.float64)
         for i in range(1, source.count):
             if cancel and cancel.is_set():
@@ -378,7 +388,7 @@ def create_master(path, output, progress=None, cancel=None):
             if progress:
                 progress(100 * (i + 1) / source.count, "Averaging calibration frames")
         # Float FITS retains native normalized calibration values without quantization.
-        write_image(output, (total / source.count).astype(np.float32))
+        write_image(output, (total / source.count).astype(np.float32), overwrite=overwrite)
     finally:
         source.close()
 

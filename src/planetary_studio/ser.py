@@ -91,6 +91,8 @@ class SerWriter:
         instrument: str = "Planetary Studio",
         observer: str = "",
         telescope: str = "",
+        *,
+        overwrite: bool = False,
     ):
         self.path = Path(path)
         self.shape = tuple(shape)
@@ -104,7 +106,7 @@ class SerWriter:
         if len(shape) == 3 and shape[2] != 3:
             raise ValueError("SER supports three color channels.")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("xb+")
+        self._file = self.path.open("wb+" if overwrite else "xb+")
         self.count = 0
         self.timestamps = []
         self.start = utc_ticks()

@@ -105,6 +105,7 @@ class CameraWorker(QThread):
                             last_frame.bits,
                             last_frame.pattern,
                             instrument=self.device.name,
+                            overwrite=bool(items[3]) if len(items) > 3 else False,
                         )
                         recording_started = time.monotonic()
                         self.status.emit("Recording raw SER frames…")

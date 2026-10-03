@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
         self.preview_timer.setInterval(200)
         self.preview_timer.timeout.connect(self.update_frame_preview)
         self.batch_paths = []
-        self.batch_directory = str(Path.home() / "Pictures/Planetary Studio")
+        self.batch_directory = self.settings.value("batch_output_directory", str(Path.home() / "Pictures/Planetary Studio"))
         self._project_path = None
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -408,18 +408,13 @@ class MainWindow(QMainWindow):
         if self.record_button.property("recording"):
             self.camera_worker.command("stop_record")
             return
-        default = str(Path.home() / "Movies" / ("planet-" + time.strftime("%Y%m%d-%H%M%S") + ".ser"))
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Record raw camera frames", default, "SER recording (*.ser)"
+        path = self.save_file(
+            "Record raw camera frames", "planet-" + time.strftime("%Y%m%d-%H%M%S") + ".ser",
+            "SER recording (*.ser)", ".ser",
         )
         if not path:
             return
-        if not path.lower().endswith(".ser"):
-            path += ".ser"
-        if Path(path).exists():
-            self.error("Choose a new file name to preserve the existing recording.")
-            return
-        self.camera_worker.command("record", path, self.record_duration.value())
+        self.camera_worker.command("record", path, self.record_duration.value(), True)
         self.record_button.setEnabled(False)
 
     def recording_saved(self, path, frames):
@@ -591,21 +586,64 @@ class MainWindow(QMainWindow):
             normalize_brightness=self.brightness.isChecked(),
         )
 
+    def dialog_directory(self):
+        remembered = self.settings.value("file_dialog_directory", self.settings.value("last_input_directory", ""))
+        for candidate in (remembered, Path.home() / "Downloads", Path.home()):
+            if candidate and Path(candidate).is_dir():
+                return str(Path(candidate).resolve())
+        return str(Path.home())
+
+    def remember_directory(self, path, *, folder=False):
+        directory = Path(path) if folder else Path(path).parent
+        if directory.is_dir():
+            self.settings.setValue("file_dialog_directory", str(directory.resolve()))
+
+    def open_file(self, title, filters, *, multiple=False, parent=None):
+        chooser = QFileDialog.getOpenFileNames if multiple else QFileDialog.getOpenFileName
+        chosen, _ = chooser(parent or self, title, self.dialog_directory(), filters)
+        if chosen:
+            self.remember_directory(chosen[0] if multiple else chosen)
+        return chosen
+
+    def select_folder(self, title):
+        chosen = QFileDialog.getExistingDirectory(self, title, self.dialog_directory())
+        if chosen:
+            self.remember_directory(chosen, folder=True)
+        return chosen
+
+    def save_file(self, title, name, filters, suffix, *, suffixes=None):
+        path, selected = QFileDialog.getSaveFileName(
+            self, title, str(Path(self.dialog_directory()) / Path(name).name), filters
+        )
+        if not path:
+            return ""
+        self.remember_directory(path)
+        allowed = suffixes or (suffix,)
+        if Path(path).suffix.lower() not in allowed:
+            extension = ".png" if "PNG" in selected else ".fits" if "FITS" in selected else suffix
+            final_path = path + extension
+            # The native dialog already confirms replacement of the selected path.
+            # Confirm separately if adding an extension resolves to another existing file.
+            if Path(final_path).exists() and QMessageBox.question(
+                self, "Replace existing file?", f"{Path(final_path).name} already exists. Replace it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) != QMessageBox.StandardButton.Yes:
+                return ""
+            path = final_path
+        return path
+
     def pick_source(self):
-        paths, _ = QFileDialog.getOpenFileNames(
-            self,
+        paths = self.open_file(
             "Open recording or image sequence",
-            self.settings.value("last_input_directory", str(Path.home() / "Downloads")),
             "Imaging files (*.ser *.avi *.mov *.mp4 *.mkv *.png *.tif *.tiff *.fits *.fit *.fts *.jpg *.jpeg *.bmp);;All files (*)",
+            multiple=True,
         )
         if paths:
             self.set_source(paths[0] if len(paths) == 1 else paths)
 
     def pick_folder(self):
-        path = QFileDialog.getExistingDirectory(
-            self, "Open image sequence folder",
-            self.settings.value("last_input_directory", str(Path.home() / "Downloads")),
-        )
+        path = self.select_folder("Open image sequence folder")
         if path:
             self.set_source(path)
 
@@ -655,8 +693,6 @@ class MainWindow(QMainWindow):
                     "Grayscale samples: if this is raw color camera footage, choose a Bayer pattern and inspect the preview."
                     if gray_video else "Source recording dimensions and pixel depth."
                 )
-                chosen = Path(path[0] if isinstance(path, list) else path)
-                self.settings.setValue("last_input_directory", str(chosen if chosen.is_dir() else chosen.parent))
             finally:
                 source.close()
             self.nav.setCurrentRow(1)
@@ -777,8 +813,8 @@ class MainWindow(QMainWindow):
             self.nav.setCurrentRow(2)
 
     def pick_calibration(self, field):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select calibration master", "", "Images (*.fits *.fit *.fts *.tif *.tiff *.png)"
+        path = self.open_file(
+            "Select calibration master", "Images (*.fits *.fit *.fts *.tif *.tiff *.png)"
         )
         if path:
             field.setText(path)
@@ -846,30 +882,28 @@ class MainWindow(QMainWindow):
     def prepare_export(self):
         if self.source_path is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export prepared frames", "prepared.ser", "SER recording (*.ser)"
+        path = self.save_file(
+            "Export prepared frames", "prepared.ser", "SER recording (*.ser)", ".ser"
         )
         if path:
-            if not path.lower().endswith(".ser"):
-                path += ".ser"
             self.start_job(
                 export_prepared,
                 (self.source_path, path, self.options()),
                 lambda _: self.log("Prepared recording saved"),
+                kwargs={"overwrite": True},
             )
 
     def master_export(self):
         if self.source_path is None:
             self.error("Open your dark or flat recording first.")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Build calibration master from current input", "master.fits", "FITS image (*.fits)"
+        path = self.save_file(
+            "Build calibration master from current input", "master.fits", "FITS image (*.fits)", ".fits"
         )
         if path:
-            if not path.lower().endswith(".fits"):
-                path += ".fits"
             self.start_job(
-                create_master, (self.source_path, path), lambda _: self.log("Calibration master saved")
+                create_master, (self.source_path, path), lambda _: self.log("Calibration master saved"),
+                kwargs={"overwrite": True},
             )
 
     def save_stack(self):
@@ -982,8 +1016,8 @@ class MainWindow(QMainWindow):
         }
 
     def pick_sharpen(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open stacked image", "", "Images (*.tif *.tiff *.fits *.fit *.fts *.png)"
+        path = self.open_file(
+            "Open stacked image", "Images (*.tif *.tiff *.fits *.fit *.fts *.png)"
         )
         if path:
             try:
@@ -1061,14 +1095,17 @@ class MainWindow(QMainWindow):
         self.rgb_alignment.setChecked(bool(values.get("align_rgb", False)))
 
     def save_preset(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save sharpening preset", "sharpening.json", "JSON (*.json)"
+        path = self.save_file(
+            "Save sharpening preset", "sharpening.json", "JSON (*.json)", ".json"
         )
         if path:
-            Path(path).write_text(json.dumps(self.finish_options(), indent=2), encoding="utf8")
+            try:
+                Path(path).write_text(json.dumps(self.finish_options(), indent=2), encoding="utf8")
+            except Exception as e:
+                self.error(str(e))
 
     def load_preset(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open sharpening preset", "", "JSON (*.json)")
+        path = self.open_file("Open sharpening preset", "JSON (*.json)")
         if path:
             try:
                 self.apply_finish_options(json.loads(Path(path).read_text(encoding="utf8")))
@@ -1076,15 +1113,12 @@ class MainWindow(QMainWindow):
                 self.error(f"Cannot load preset: {e}")
 
     def image_save_path(self, name):
-        path, selected = QFileDialog.getSaveFileName(
-            self,
+        return self.save_file(
             "Export image",
             name + ".tif",
             "16-bit TIFF (*.tif);;16-bit PNG (*.png);;Float FITS (*.fits)",
+            ".tif", suffixes=(".tif", ".tiff", ".png", ".fits", ".fit", ".fts"),
         )
-        if path and Path(path).suffix.lower() not in (".tif", ".tiff", ".png", ".fits", ".fit", ".fts"):
-            path += ".png" if "PNG" in selected else ".fits" if "FITS" in selected else ".tif"
-        return path
 
     def export_dialog(self, image, name):
         path = self.image_save_path(name)
@@ -1150,8 +1184,8 @@ class MainWindow(QMainWindow):
         return page
 
     def add_batch(self):
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "Add recordings to queue", "", "Recordings (*.ser *.avi *.mov *.mp4 *.mkv)"
+        paths = self.open_file(
+            "Add recordings to queue", "Recordings (*.ser *.avi *.mov *.mp4 *.mkv)", multiple=True
         )
         for path in paths:
             if path in self.batch_paths:
@@ -1171,9 +1205,10 @@ class MainWindow(QMainWindow):
             self.batch_table.removeRow(row)
 
     def choose_batch_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "Select queue output folder", self.batch_directory)
+        path = self.select_folder("Select queue output folder")
         if path:
             self.batch_directory = path
+            self.settings.setValue("batch_output_directory", path)
             self.batch_output_label.setText("Output: " + path)
 
     def run_batch(self):
@@ -1289,11 +1324,10 @@ class MainWindow(QMainWindow):
                 row.addWidget(field, 1)
 
                 def pick(checked=False, f=field):
-                    path, _ = QFileDialog.getOpenFileName(
-                        dialog,
+                    path = self.open_file(
                         "Select native vendor library",
-                        "",
                         "Libraries (*.dylib *.so *.so.* *.dll);;All files (*)",
+                        parent=dialog,
                     )
                     if path:
                         f.setText(path)
@@ -1317,11 +1351,11 @@ class MainWindow(QMainWindow):
             self.scan_cameras()
 
     def save_project(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
+        path = self.save_file(
             "Save imaging project",
             self._project_path or "project.planetary.json",
             "Planetary project (*.json)",
+            ".json",
         )
         if not path:
             return
@@ -1349,7 +1383,7 @@ class MainWindow(QMainWindow):
         if self.job and self.job.isRunning():
             self.error("Wait for processing to finish or cancel it before opening another project.")
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Open imaging project", "", "Planetary project (*.json)")
+        path = self.open_file("Open imaging project", "Planetary project (*.json)")
         if not path:
             return
         try:

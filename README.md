@@ -48,6 +48,8 @@ The quality graph has percentage grid lines, relative quality labels, and a **Ke
 
 Raw grayscale AVI files may contain Bayer samples without a pattern tag. Select the appropriate Bayer pattern and compare its preview; AUTO cannot determine the camera or any recording flips from an untagged file. Already converted color images should use AUTO.
 
+All file pickers start in the last folder you selected in the app, and remember it across restarts. Save dialogs honor **Replace** for existing outputs; processing exports require a different file from the source recording or images.
+
 ## Cameras
 
 | Connection | Platforms | Capabilities | Validation |

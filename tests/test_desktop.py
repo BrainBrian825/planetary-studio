@@ -2,6 +2,7 @@ import os
 import time
 import json
 import numpy as np
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
@@ -35,10 +36,13 @@ def test_desktop_workflow_and_shutdown():
     app.processEvents()
 
 
-def test_capture_worker_records_and_finalizes_ser(tmp_path):
+@pytest.mark.parametrize("replace", [False, True])
+def test_capture_worker_records_and_finalizes_ser(tmp_path, replace):
     app = app_instance()
     worker = CameraWorker(discover()[0])
     state = {"ready": False, "preview": False, "saved": False, "error": ""}
+    if replace:
+        (tmp_path / "record.ser").write_bytes(b"previous recording")
 
     def ready(modes, controls):
         state["ready"] = True
@@ -47,7 +51,7 @@ def test_capture_worker_records_and_finalizes_ser(tmp_path):
     def preview(image, stats):
         if not state["preview"]:
             state["preview"] = True
-            worker.command("record", str(tmp_path / "record.ser"), 0.35)
+            worker.command("record", str(tmp_path / "record.ser"), 0.35, replace)
 
     worker.ready.connect(ready)
     worker.preview.connect(preview)
