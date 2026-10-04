@@ -111,6 +111,10 @@ def test_desktop_scaled_point_editing_and_project_round_trip(tmp_path, monkeypat
     app.processEvents()
     panel = window.pages.widget(1).findChild(QScrollArea)
     assert panel.horizontalScrollBar().maximum() == 0
+    panel.setFixedWidth(400)
+    window.resize(1000, 640)
+    app.processEvents()
+    assert panel.horizontalScrollBar().maximum() == 0
     def until(predicate):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not predicate():

@@ -1,4 +1,4 @@
-Planetary Studio 0.5.0 improves alignment controls and simplifies interface text.
+Planetary Studio 0.5.1 adds recording filters, quality choices, and alignment controls, and simplifies interface text.
 
 - Page headings use Capture, Prepare & Stack, Sharpen, Batch Queue, and Camera support, with direct descriptions of their controls.
 - Minimum brightness filters automatic alignment point centers using real image brightness; the grid is centered on the bright region. Preview display stretching does not affect placement.
@@ -10,6 +10,7 @@ Planetary Studio 0.5.0 improves alignment controls and simplifies interface text
 - Gradient, Laplacian, Brenner, and Brightness quality estimators are available. Noise smoothing affects detail scoring only. Keep best is calculated after object rejection; reports include original source indices and rejection reasons.
 - The gridded quality graph can show best-to-worst ranking or recording order, with a corresponding selection threshold.
 - Ranked graphs omit rejected frames; recording-order graphs mark them in amber. All frame selection and detection settings are saved in projects and apply to sample previews and batch processing.
+- Settings rows wrap when needed to fit the native controls on macOS, Windows, and Linux. Quality noise smoothing accepts decimal values.
 
 The experimental neural wavelet sharpening prototype remains local and is not part of this release.
 
