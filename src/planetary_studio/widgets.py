@@ -1,11 +1,13 @@
 import numpy as np
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, Signal
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QPainterPath, QPalette
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget
+from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget, QGraphicsEllipseItem, QGraphicsItem
 from .imaging import preview_pixels
 
 
 class ImageView(QGraphicsView):
+    markerClicked = Signal(float, float, bool)
+
     def __init__(self, message="Your image will appear here"):
         super().__init__()
         self.scene = QGraphicsScene(self)
@@ -19,12 +21,15 @@ class ImageView(QGraphicsView):
         self.fit = True
         self.image = None
         self.markers = []
+        self.object_box = None
+        self.marker_editing = False
         self.setMinimumSize(320, 240)
 
     def clear_image(self):
         self.image = None
         self.item.setPixmap(QPixmap())
         self.set_markers([], 0)
+        self.set_object_bounds(None)
         self.message.show()
         self.resetTransform()
         self.fit = True
@@ -34,10 +39,40 @@ class ImageView(QGraphicsView):
         for marker in self.markers:
             self.scene.removeItem(marker)
         self.markers = []
-        pen = QPen(QColor("#76a783"), 1)
+        pen = QPen(QColor("#79aebf"), 1)
         pen.setCosmetic(True)
         for x, y in points:
-            self.markers.append(self.scene.addRect(x - size / 2, y - size / 2, size, size, pen))
+            box = self.scene.addRect(x - size / 2, y - size / 2, size, size, pen)
+            center = QGraphicsEllipseItem(-2, -2, 4, 4, box)
+            center.setPos(x, y)
+            center.setFlag(QGraphicsItem.ItemIgnoresTransformations)
+            center.setPen(QPen(QColor("#101010"), 1))
+            center.setBrush(QColor("#a2d2e0"))
+            self.markers.append(box)
+
+    def set_object_bounds(self, bounds):
+        if self.object_box is not None:
+            self.scene.removeItem(self.object_box)
+            self.object_box = None
+        if bounds is not None:
+            pen = QPen(QColor("#dfa451"), 1, Qt.DashLine)
+            pen.setCosmetic(True)
+            self.object_box = self.scene.addRect(*bounds, pen)
+
+    def set_marker_editing(self, enabled):
+        self.marker_editing = bool(enabled)
+        self.setDragMode(QGraphicsView.NoDrag if enabled else QGraphicsView.ScrollHandDrag)
+        self.viewport().setCursor(Qt.CrossCursor if enabled else Qt.OpenHandCursor)
+
+    def mousePressEvent(self, event):
+        if self.marker_editing and self.image is not None and event.button() in (Qt.LeftButton, Qt.RightButton):
+            position = self.mapToScene(event.position().toPoint())
+            h, w = self.image.shape[:2]
+            if 0 <= position.x() < w and 0 <= position.y() < h:
+                self.markerClicked.emit(position.x(), position.y(), event.button() == Qt.RightButton)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -48,6 +83,7 @@ class ImageView(QGraphicsView):
 
     def set_image(self, image, stretch=False):
         self.set_markers([], 0)
+        self.set_object_bounds(None)
         self.image = image
         pixels = preview_pixels(image, stretch)
         h, w = pixels.shape[:2]
@@ -133,14 +169,28 @@ class QualityPlot(QWidget):
     def __init__(self):
         super().__init__()
         self.scores = np.array([])
+        self.raw_scores = np.array([])
+        self.rejected_indices = []
+        self.order = "ranked"
         self.keep_percent = 25.0
         self.setMinimumHeight(145)
         self.setMaximumHeight(165)
-        self.setToolTip("Quality is relative to the best frame in this recording or preview sample. Frames are ranked best to worst.")
+        self.setToolTip("Quality is relative to the best frame. Recording order shows changes during capture; ranked order shows the best frames first.")
 
-    def set_scores(self, scores):
-        self.scores = np.sort(scores)[::-1]
+    def set_scores(self, scores, rejected_indices=()):
+        self.raw_scores = np.asarray(scores, dtype=np.float32).copy()
+        self.rejected_indices = sorted({int(i) for i in rejected_indices if 0 <= i < len(self.raw_scores)})
+        self.scores = np.sort(self.accepted_scores())[::-1] if self.order == "ranked" else self.raw_scores
         self.update()
+
+    def accepted_scores(self):
+        return np.delete(self.raw_scores, self.rejected_indices)
+
+    def set_order(self, order):
+        if order not in ("ranked", "recording"):
+            raise ValueError("Choose ranked or recording order for the quality graph.")
+        self.order = order
+        self.set_scores(self.raw_scores, self.rejected_indices)
 
     def set_keep_percent(self, value):
         self.keep_percent = float(value)
@@ -150,7 +200,8 @@ class QualityPlot(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), self.palette().color(QPalette.Base))
         p.setPen(self.palette().color(QPalette.PlaceholderText))
-        p.drawText(10, 20, "Frame quality · best → worst")
+        p.drawText(10, 20, "Frame quality · " + ("best to worst" if self.order == "ranked" else "recording order")
+                   + (f" · {len(self.rejected_indices)} rejected" if self.rejected_indices else ""))
         left, top, width, height = 42, 30, max(1, self.width() - 58), max(1, self.height() - 64)
         grid = self.palette().color(QPalette.PlaceholderText)
         grid.setAlpha(65)
@@ -162,19 +213,22 @@ class QualityPlot(QWidget):
             p.setPen(self.palette().color(QPalette.PlaceholderText))
             p.drawText(int(x) - 16, top + height + 17, f"{tick * 25}%")
             p.drawText(4, int(y) + 4, f"{100 - tick * 25}%")
-        if self.scores.size:
+        if self.scores.size and self.order == "ranked":
             selected = self.palette().color(QPalette.Highlight)
             selected.setAlpha(65)
             p.fillRect(left, top, round(width * self.keep_percent / 100), height, selected)
         p.setPen(self.palette().color(QPalette.PlaceholderText))
-        p.drawText(left, self.height() - 3, "Ranked frames (%) · quality relative to best (%)")
+        p.drawText(left, self.height() - 3,
+                   ("Ranked frames (%)" if self.order == "ranked" else "Recording position (%)")
+                   + " · quality relative to best (%)")
         if not len(self.scores):
             p.drawText(left + 8, top + height // 2, "Preview a sample or stack to assess quality")
             return
         p.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
-        maximum = max(float(self.scores.max()), 1e-9)
-        sampled = self.scores[:: max(1, len(self.scores) // 500)]
+        accepted = self.accepted_scores()
+        maximum = max(float(accepted.max()), 1e-9) if len(accepted) else 1e-9
+        sampled = self.scores[np.linspace(0, len(self.scores) - 1, min(600, len(self.scores)), dtype=int)]
         for i, score in enumerate(sampled):
             x, y = (
                 left + i * width / max(1, len(sampled) - 1),
@@ -183,8 +237,20 @@ class QualityPlot(QWidget):
             path.moveTo(x, y) if i == 0 else path.lineTo(x, y)
         p.setPen(QPen(self.palette().color(QPalette.Text), 2))
         p.drawPath(path)
-        cutoff = left + width * self.keep_percent / 100
         p.setPen(QPen(self.palette().color(QPalette.Text), 1, Qt.DashLine))
-        p.drawLine(int(cutoff), top, int(cutoff), top + height)
-        p.drawText(max(left, min(int(cutoff) + 6, left + width - 110)), top + 16,
-                   f"Keep {self.keep_percent:g}%")
+        if self.order == "ranked":
+            cutoff = left + width * self.keep_percent / 100
+            p.drawLine(int(cutoff), top, int(cutoff), top + height)
+            p.drawText(max(left, min(int(cutoff) + 6, left + width - 110)), top + 16,
+                       f"Keep {self.keep_percent:g}%")
+        elif len(accepted):
+            rank = min(len(accepted) - 1, max(0, int(np.ceil(len(accepted) * self.keep_percent / 100)) - 1))
+            threshold = float(np.sort(accepted)[::-1][rank])
+            cutoff = top + height * (1 - threshold / maximum)
+            p.drawLine(left, int(cutoff), left + width, int(cutoff))
+            p.drawText(left + 6, max(top + 16, int(cutoff) - 5), f"Keep best {self.keep_percent:g}%")
+        if self.order == "recording" and self.rejected_indices:
+            p.setPen(QPen(QColor("#dfa451"), 2))
+            positions = np.unique(np.round(np.array(self.rejected_indices) * width / max(1, len(self.raw_scores) - 1))).astype(int)
+            for position in positions:
+                p.drawLine(left + int(position), top + height - 6, left + int(position), top + height)

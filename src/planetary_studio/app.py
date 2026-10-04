@@ -38,7 +38,8 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .cameras import discover
 from .imaging import normalized, read_image, write_image
-from .processing import StackOptions, stack_source, finish_image, export_prepared, create_master, Cancelled
+from .processing import (StackOptions, stack_source, finish_image, export_prepared, create_master,
+                         Cancelled, input_frame_range)
 from .sources import open_source
 from .widgets import ImageView, Histogram, QualityPlot
 from .workers import TaskWorker, CameraWorker
@@ -120,6 +121,8 @@ class MainWindow(QMainWindow):
         self.finish_generation = 0
         self.preview_generation = 0
         self.preparation_generation = 0
+        self.manual_alignment_points = None
+        self.last_frame_preview = None
         self.preview_worker, self.sample_result = None, None
         self.source_info = {}
         self.preview_timer = QTimer(self)
@@ -226,7 +229,7 @@ class MainWindow(QMainWindow):
 
     def build_capture(self):
         page, layout = page_layout(
-            "Capture the sky",
+            "Capture",
             "Connect a camera, choose a sensor mode, and record raw frames. Scroll to zoom; double-click the image to fit.",
         )
         split = QSplitter()
@@ -435,7 +438,7 @@ class MainWindow(QMainWindow):
     def build_stack(self):
         page, layout = page_layout(
             "Prepare & Stack",
-            "Rank the frames, correct camera drift, and combine the clearest detail. Large recordings are read from disk in passes.",
+            "Prepare frames, set alignment points, and stack the selected frames.",
         )
         row = QHBoxLayout()
         row.addWidget(button("Open recording / images…", self.pick_source, True))
@@ -470,6 +473,7 @@ class MainWindow(QMainWindow):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 8, 0)
         self.stack_view = ImageView("Open a SER, video, or image sequence")
+        self.stack_view.markerClicked.connect(self.edit_alignment_point)
         self.frame_slider = QSlider(Qt.Horizontal)
         self.frame_slider.setEnabled(False)
         self.frame_slider.setAccessibleName("Preview frame")
@@ -481,6 +485,15 @@ class MainWindow(QMainWindow):
         ll.addWidget(self.stack_view, 1)
         ll.addWidget(self.frame_slider)
         ll.addWidget(self.preview_details)
+        quality_row = QHBoxLayout()
+        quality_row.addWidget(QLabel("Quality graph"))
+        self.quality_order = QComboBox()
+        self.quality_order.addItems(["Best to worst", "Recording order"])
+        self.quality_order.currentIndexChanged.connect(
+            lambda i: self.quality_plot.set_order("ranked" if i == 0 else "recording"))
+        quality_row.addWidget(self.quality_order)
+        quality_row.addStretch()
+        ll.addLayout(quality_row)
         ll.addWidget(self.quality_plot)
         panel = QWidget()
         pl = QVBoxLayout(panel)
@@ -500,6 +513,12 @@ class MainWindow(QMainWindow):
         self.crop_h.setSpecialValueText("Full height")
         form.addRow("Crop width", self.crop_w)
         form.addRow("Crop height", self.crop_h)
+        self.first_frame, self.last_frame = integer(1, 2_000_000_000, 1), integer(0, 2_000_000_000, 0)
+        self.last_frame.setSpecialValueText("Last frame")
+        self.first_frame.setToolTip("First included frame, numbered from 1. Applies to sample previews, stacking, and prepared SER export.")
+        self.last_frame.setToolTip("Last included frame. Zero uses the end of the recording.")
+        form.addRow("First frame", self.first_frame)
+        form.addRow("Last frame", self.last_frame)
         self.dark_path, self.flat_path = QLineEdit(), QLineEdit()
         for title, field in [("Dark master", self.dark_path), ("Flat master", self.flat_path)]:
             row = QHBoxLayout()
@@ -514,29 +533,89 @@ class MainWindow(QMainWindow):
         prep.layout().addWidget(button("Export prepared SER…", self.prepare_export))
         prep.layout().addWidget(button("Build calibration master…", self.master_export))
         pl.addWidget(prep)
-        stack = group("Lucky imaging")
+        detection = group("Object detection · Planet mode")
+        self.reject_missing = QCheckBox("Reject frames with no object")
+        self.reject_cutoff = QCheckBox("Reject frames with a cut-off object")
+        self.reject_cutoff.setToolTip("Reject objects touching the recording boundary or clipped by the chosen crop. Frames with no detected object are also rejected.")
+        self.show_object = QCheckBox("Show detected object in preview")
+        self.show_object.setToolTip("The dashed amber box shows detection in Prepared frame view. Check the box and rejection message before processing.")
+        detection.layout().addWidget(self.reject_missing)
+        detection.layout().addWidget(self.reject_cutoff)
+        detection.layout().addWidget(self.show_object)
+        form = QFormLayout()
+        self.object_threshold = SliderControl(0, 100, 0, "Object detection threshold")
+        self.object_threshold.spin.setDecimals(1)
+        self.object_threshold.spin.setSingleStep(0.1)
+        self.object_threshold.spin.setSuffix(" %")
+        self.object_threshold.spin.setSpecialValueText("Auto")
+        self.object_threshold.setToolTip("Auto estimates the background and noise in each frame. A manual value uses a fixed percentage of full brightness, before preview brightening or normalization.")
+        self.min_object_size = integer(2, 20000, 15)
+        self.min_object_size.setSuffix(" px")
+        self.min_object_size.setToolTip("The detected object must be at least this wide and high. Lower this for a small planet; raise it to ignore noise and small bright spots.")
+        form.addRow("Detection threshold", self.object_threshold)
+        form.addRow("Minimum object size", self.min_object_size)
+        detection.layout().addLayout(form)
+        detection_note = QLabel("Keep best applies after rejected frames are removed. Object rejection is disabled in Moon / Sun mode.")
+        detection_note.setWordWrap(True)
+        detection.layout().addWidget(detection_note)
+        pl.addWidget(detection)
+        stack = group("Frame selection & alignment")
         form = QFormLayout()
         self.keep_percent = number(0.1, 100, 25, 1, "%")
         self.keep_percent.valueChanged.connect(self.quality_plot.set_keep_percent)
         form.addRow("Keep best", self.keep_percent)
+        self.quality_method = QComboBox()
+        for label, value in (("Gradient", "gradient"), ("Laplacian", "laplacian"),
+                             ("Brenner", "brenner"), ("Brightness", "brightness")):
+            self.quality_method.addItem(label, value)
+        self.quality_method.setToolTip("Gradient is the default. Laplacian is more sensitive to fine detail and noise. Brenner measures contrast across two pixels. Brightness ranks clearer, brighter frames; it does not measure sharpness.")
+        self.quality_noise = number(0, 3, 0.7, 1, " px")
+        self.quality_noise.setSingleStep(0.1)
+        self.quality_noise.setToolTip("Gaussian smoothing before quality estimation. Increase it when sensor noise is being ranked as detail. This does not blur the output. Brightness ignores this setting.")
+        form.addRow("Quality estimator", self.quality_method)
+        form.addRow("Noise smoothing", self.quality_noise)
         self.local_alignment = QCheckBox("Local alignment points")
         self.local_alignment.setChecked(True)
         form.addRow(self.local_alignment)
+        self.quality_mode = QComboBox()
+        self.quality_mode.addItems(["Local · per point", "Global · shared frames"])
+        self.quality_mode.setToolTip(
+            "Local ranks frames separately for each point. Global uses the same best frames everywhere and can help avoid patch seams."
+        )
+        form.addRow("Frame ranking", self.quality_mode)
         self.show_alignment = QCheckBox("Show alignment points in preview")
         form.addRow(self.show_alignment)
         self.ap_size = integer(16, 512, 64)
         self.ap_size.setSingleStep(16)
         form.addRow("Point size", self.ap_size)
+        self.ap_min_brightness = SliderControl(0, 100, 10, "Minimum alignment brightness")
+        self.ap_min_brightness.spin.setDecimals(1)
+        self.ap_min_brightness.spin.setSingleStep(0.1)
+        self.ap_min_brightness.spin.setSuffix(" %")
+        self.ap_min_brightness.setToolTip(
+            "Minimum brightness at the center of an automatic alignment point, as a percentage of full scale. Lower it for dim targets. Brighten preview does not change this threshold."
+        )
+        form.addRow("Minimum brightness", self.ap_min_brightness)
+        self.edit_points = QCheckBox("Edit alignment points")
+        self.edit_points.setToolTip("In Prepared frame view: click to add a point, right-click to remove the nearest point.")
+        form.addRow(self.edit_points)
+        point_buttons = QHBoxLayout()
+        point_buttons.addWidget(button("Place grid", self.regenerate_alignment_points))
+        point_buttons.addWidget(button("Clear points", self.clear_alignment_points))
+        form.addRow(point_buttons)
+        self.alignment_status = QLabel("Automatic grid. Enable editing to add or remove points.")
+        self.alignment_status.setWordWrap(True)
+        form.addRow(self.alignment_status)
         self.scale_combo = QComboBox()
         self.scale_combo.addItems(["Native size", "1.5× resample", "2× resample"])
         self.scale_combo.setToolTip("Lanczos enlargement; this is not drizzle reconstruction.")
         form.addRow("Output size", self.scale_combo)
         stack.layout().addLayout(form)
-        self.stack_button = button("Stack all frames", self.run_stack, True)
+        self.stack_button = button("Stack recording", self.run_stack, True)
         self.stack_button.setEnabled(False)
         self.save_stack_button = button("Export stack…", self.save_stack)
         self.save_stack_button.setEnabled(False)
-        self.to_sharpen_button = button("Continue to Sharpen →", self.continue_to_sharpen)
+        self.to_sharpen_button = button("Open in Sharpen", self.continue_to_sharpen)
         self.to_sharpen_button.setEnabled(False)
         pl.addWidget(stack)
         pl.addStretch()
@@ -560,11 +639,23 @@ class MainWindow(QMainWindow):
         self.frame_view_mode.currentIndexChanged.connect(self.view_changed)
         self.preview_brighten.toggled.connect(self.view_changed)
         self.show_alignment.toggled.connect(self.view_changed)
+        self.edit_points.toggled.connect(self.alignment_editing_changed)
+        self.ap_min_brightness.valueChanged.connect(self.preparation_changed)
+        self.quality_mode.currentIndexChanged.connect(self.preparation_changed)
+        self.quality_method.currentIndexChanged.connect(self.preparation_changed)
+        self.quality_method.currentIndexChanged.connect(
+            lambda: self.quality_noise.setEnabled(self.quality_method.currentData() != "brightness"))
+        self.show_object.toggled.connect(self.view_changed)
+        self.object_threshold.valueChanged.connect(self.preparation_changed)
+        self.target_combo.currentIndexChanged.connect(
+            lambda i: detection.setEnabled(i == 0))
+        self.local_alignment.toggled.connect(self.quality_mode.setEnabled)
         for combo in (self.target_combo, self.bayer_combo, self.scale_combo):
             combo.currentIndexChanged.connect(self.preparation_changed)
-        for spin in (self.crop_w, self.crop_h, self.keep_percent, self.ap_size):
+        for spin in (self.crop_w, self.crop_h, self.keep_percent, self.ap_size, self.first_frame, self.last_frame,
+                     self.min_object_size, self.quality_noise):
             spin.valueChanged.connect(self.preparation_changed)
-        for check in (self.hot_pixels, self.brightness, self.local_alignment):
+        for check in (self.hot_pixels, self.brightness, self.local_alignment, self.reject_missing, self.reject_cutoff):
             check.toggled.connect(self.preparation_changed)
         for field in (self.dark_path, self.flat_path):
             field.editingFinished.connect(self.preparation_changed)
@@ -584,6 +675,18 @@ class MainWindow(QMainWindow):
             alignment_size=self.ap_size.value(),
             scale=(1.0, 1.5, 2.0)[self.scale_combo.currentIndex()],
             normalize_brightness=self.brightness.isChecked(),
+            alignment_min_brightness=self.ap_min_brightness.spin.value() / 100,
+            manual_alignment_points=(list(self.manual_alignment_points)
+                                     if self.manual_alignment_points is not None else None),
+            local_quality=self.quality_mode.currentIndex() == 0,
+            first_frame=self.first_frame.value(),
+            last_frame=self.last_frame.value(),
+            quality_method=self.quality_method.currentData(),
+            quality_noise_sigma=self.quality_noise.value(),
+            reject_missing_object=self.reject_missing.isChecked(),
+            reject_cutoff_object=self.reject_cutoff.isChecked(),
+            object_detection_threshold=self.object_threshold.spin.value() / 100,
+            min_object_size=self.min_object_size.value(),
         )
 
     def dialog_directory(self):
@@ -656,6 +759,8 @@ class MainWindow(QMainWindow):
             try:
                 frame = source.read(0)
                 self.source_path = path
+                self.manual_alignment_points = None
+                self.last_frame_preview = None
                 self.preparation_generation += 1
                 gray_video = (source.pattern == "RGB" and frame.ndim == 3
                               and np.array_equal(frame[..., 0], frame[..., 1])
@@ -680,8 +785,12 @@ class MainWindow(QMainWindow):
                 self.stack_button.setEnabled(not (self.job and self.job.isRunning()))
                 self.sample_button.setEnabled(self.stack_button.isEnabled())
                 self.frame_slider.blockSignals(True)
-                self.frame_slider.setRange(0, source.count - 1)
-                self.frame_slider.setValue(0)
+                try:
+                    eligible = input_frame_range(source.count, self.options())
+                except ValueError:
+                    eligible = range(source.count)
+                self.frame_slider.setRange(eligible.start, eligible.stop - 1)
+                self.frame_slider.setValue(eligible.start)
                 self.frame_slider.setEnabled(True)
                 self.frame_slider.blockSignals(False)
                 label = f"{len(path)} images" if isinstance(path, list) else Path(path).name
@@ -706,6 +815,19 @@ class MainWindow(QMainWindow):
         self.schedule_frame_preview()
 
     def preparation_changed(self, *_):
+        if self.sender() in (self.target_combo, self.bayer_combo, self.crop_w, self.crop_h, self.ap_size):
+            self.manual_alignment_points = None
+        self.last_frame_preview = None
+        self.stack_view.set_marker_editing(False)
+        if self.source_info:
+            try:
+                self.options().validate()
+                eligible = input_frame_range(self.source_info['count'], self.options())
+                with QSignalBlocker(self.frame_slider):
+                    self.frame_slider.setRange(eligible.start, eligible.stop - 1)
+            except ValueError:
+                # Leave the range controls editable while an incomplete range is being entered.
+                pass
         self.preparation_generation += 1
         self.sample_result = None
         self.frame_view_mode.model().item(2).setEnabled(False)
@@ -719,6 +841,8 @@ class MainWindow(QMainWindow):
     def schedule_frame_preview(self, *_):
         self.preview_generation += 1
         if self.source_path and self.frame_view_mode.currentIndex() < 2:
+            self.last_frame_preview = None
+            self.stack_view.set_marker_editing(False)
             self.preview_details.setText("Updating selected frame preview…")
             self.preview_timer.start()
 
@@ -746,9 +870,12 @@ class MainWindow(QMainWindow):
     def frame_preview_done(self, preview, generation):
         if generation != self.preview_generation or self.frame_view_mode.currentIndex() >= 2:
             return
+        self.last_frame_preview = preview
         self.stack_view.set_image(preview.image, stretch=self.preview_brighten.isChecked())
         if self.show_alignment.isChecked():
             self.stack_view.set_markers(preview.points, preview.point_size)
+        if self.show_object.isChecked():
+            self.stack_view.set_object_bounds(preview.object_bounds)
         h, w = preview.image.shape[:2]
         note = "Original" if self.frame_view_mode.currentIndex() == 0 else "Prepared"
         self.preview_details.setText(
@@ -756,10 +883,21 @@ class MainWindow(QMainWindow):
             + (f" · {len(preview.points)} alignment points" if self.show_alignment.isChecked() else "")
             + (" · grayscale AVI: choose a Bayer pattern for raw color" if self.source_info['gray_video']
                and self.bayer_combo.currentText() == "AUTO" else "")
+            + (f" · Will reject: {preview.rejection_reason}" if preview.rejection_reason else
+               " · Object not detected" if note == "Prepared" and self.show_object.isChecked()
+               and preview.object_bounds is None and self.options().center_object else "")
         )
         self.to_sharpen_button.setEnabled(False)
+        self.update_alignment_editing()
+        count = len(preview.points)
+        self.alignment_status.setText("Choose Prepared frame to see and edit alignment points." if note == "Original" else
+            (f"Automatic grid: {count} points." if self.manual_alignment_points is None else f"Manual grid: {count} points.")
+            + (" Click to add; right-click to remove." if self.edit_points.isChecked() else "")
+            + (" No local points; stacking will use global alignment." if count == 0 else "")
+        )
 
     def view_changed(self, *_):
+        self.stack_view.set_marker_editing(False)
         self.preview_generation += 1
         mode = self.frame_view_mode.currentIndex()
         if mode < 2:
@@ -773,18 +911,85 @@ class MainWindow(QMainWindow):
         self.stack_view.set_image(result.image, stretch=self.preview_brighten.isChecked())
         if self.show_alignment.isChecked():
             points = [(x * result.options.scale, y * result.options.scale) for x, y in result.alignment_points]
-            self.stack_view.set_markers(points, result.options.alignment_size * result.options.scale)
-        self.quality_plot.set_scores(result.quality)
+            self.stack_view.set_markers(points, (result.point_size or result.options.alignment_size) * result.options.scale)
+        self.quality_plot.set_scores(result.quality, result.rejected_frames)
         label = "Sample preview" if mode == 2 else "Full stack"
         self.preview_details.setText(
             f"{label} · {len(result.selected):,} of {result.input_frames:,} sampled frames selected"
             if mode == 2 else f"Full stack · {len(result.selected):,} of {result.input_frames:,} frames selected"
         )
+        if result.rejected_frames:
+            self.preview_details.setText(self.preview_details.text() + f" · {len(result.rejected_frames):,} rejected")
         if mode == 2:
             self.preview_details.setText(self.preview_details.text() + " · approximate result, not the full recording")
         elif asdict(result.options) != asdict(self.options()):
             self.preview_details.setText(self.preview_details.text() + " · uses earlier settings")
         self.to_sharpen_button.setEnabled(True)
+
+    def update_alignment_editing(self):
+        enabled = (self.edit_points.isChecked() and self.local_alignment.isChecked()
+                   and self.frame_view_mode.currentIndex() == 1 and self.last_frame_preview is not None)
+        self.stack_view.set_marker_editing(enabled)
+
+    def alignment_editing_changed(self, enabled):
+        if enabled:
+            self.local_alignment.setChecked(True)
+            self.show_alignment.setChecked(True)
+            self.frame_view_mode.setCurrentIndex(1)
+        self.update_alignment_editing()
+
+    def regenerate_alignment_points(self):
+        self.manual_alignment_points = None
+        self.local_alignment.setChecked(True)
+        self.show_alignment.setChecked(True)
+        self.preparation_changed()
+
+    def clear_alignment_points(self):
+        self.manual_alignment_points = []
+        self.show_alignment.setChecked(True)
+        self.manual_grid_changed()
+
+    def manual_grid_changed(self):
+        if self.last_frame_preview is None or self.frame_view_mode.currentIndex() != 1:
+            self.preparation_changed()
+            return
+        self.preparation_generation += 1
+        self.preview_generation += 1
+        self.sample_result = None
+        self.frame_view_mode.model().item(2).setEnabled(False)
+        self.quality_plot.set_scores([])
+        scale = self.options().scale
+        preview = self.last_frame_preview
+        preview.points = [(x * scale, y * scale) for x, y in self.manual_alignment_points]
+        self.frame_preview_done(preview, self.preview_generation)
+
+    def edit_alignment_point(self, x, y, remove):
+        if not self.stack_view.marker_editing or self.last_frame_preview is None:
+            return
+        preview = self.last_frame_preview
+        scale = self.options().scale
+        points = ([(round(px / scale), round(py / scale)) for px, py in preview.points]
+                  if self.manual_alignment_points is None else list(self.manual_alignment_points))
+        x, y = round(x / scale), round(y / scale)
+        radius = preview.point_size / scale / 2
+        h, w = round(preview.image.shape[0] / scale), round(preview.image.shape[1] / scale)
+        if remove:
+            if not points:
+                return
+            candidates = [p for p in points if abs(p[0] - x) <= radius and abs(p[1] - y) <= radius]
+            if not candidates:
+                self.log("Right-click inside a point box to remove it.")
+                return
+            nearest = min(candidates, key=lambda p: (p[0] - x) ** 2 + (p[1] - y) ** 2)
+            points.remove(nearest)
+        else:
+            if not (radius <= x <= w - radius and radius <= y <= h - radius):
+                self.log("Place the point farther from the image boundary so its box fits inside the image.")
+                return
+            if (x, y) not in points:
+                points.append((x, y))
+        self.manual_alignment_points = points
+        self.manual_grid_changed()
 
     def run_sample(self):
         if self.source_path:
@@ -918,8 +1123,8 @@ class MainWindow(QMainWindow):
 
     def build_sharpen(self):
         page, layout = page_layout(
-            "Bring out the detail",
-            "Wavelet detail, deconvolution, optional AI noise cleanup, and color adjustments. Export a 16-bit image or floating-point FITS.",
+            "Sharpen",
+            "Adjust wavelets, deconvolution, noise cleanup, and color. Compare with the original before exporting.",
         )
         row = QHBoxLayout()
         row.addWidget(button("Open stacked image…", self.pick_sharpen))
@@ -1298,8 +1503,8 @@ class MainWindow(QMainWindow):
 
     def build_support(self):
         page, layout = page_layout(
-            "Camera support & guidance",
-            "Connection details are shown here so a driver failure does not get hidden behind “Unable to connect camera”.",
+            "Camera support",
+            "Camera drivers, connection requirements, and troubleshooting.",
         )
         guide = QTextBrowser()
         guide.setOpenExternalLinks(True)
@@ -1432,10 +1637,23 @@ class MainWindow(QMainWindow):
             self.brightness.setChecked(options.normalize_brightness)
             self.local_alignment.setChecked(options.local_alignment)
             self.ap_size.setValue(options.alignment_size)
+            self.ap_min_brightness.set_value(options.alignment_min_brightness * 100)
+            self.quality_mode.setCurrentIndex(0 if options.local_quality else 1)
             self.scale_combo.setCurrentIndex((1.0, 1.5, 2.0).index(options.scale))
+            self.first_frame.setValue(options.first_frame)
+            self.last_frame.setValue(options.last_frame)
+            self.quality_method.setCurrentIndex(self.quality_method.findData(options.quality_method))
+            self.quality_noise.setValue(options.quality_noise_sigma)
+            self.reject_missing.setChecked(options.reject_missing_object)
+            self.reject_cutoff.setChecked(options.reject_cutoff_object)
+            self.object_threshold.set_value(options.object_detection_threshold * 100)
+            self.min_object_size.setValue(options.min_object_size)
             self.apply_finish_options(data.get("sharpen", {}))
             if data.get("source"):
                 self.set_source(data["source"])
+            self.manual_alignment_points = ([tuple(p) for p in options.manual_alignment_points]
+                                            if options.manual_alignment_points is not None else None)
+            self.schedule_frame_preview()
             self.batch_paths = list(data.get("batch", []))
             self.batch_table.setRowCount(len(self.batch_paths))
             for i, p in enumerate(self.batch_paths):

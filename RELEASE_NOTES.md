@@ -1,4 +1,19 @@
-Planetary Studio 0.4.1 adds optional local AI denoising after sharpening.
+Planetary Studio 0.5.0 improves alignment controls and simplifies interface text.
+
+- Page headings use Capture, Prepare & Stack, Sharpen, Batch Queue, and Camera support, with direct descriptions of their controls.
+- Minimum brightness filters automatic alignment point centers using real image brightness; the grid is centered on the bright region. Preview display stretching does not affect placement.
+- Alignment boxes use the actual even patch size after small/odd crops and output enlargement. Center markers make their positions clear.
+- Manual alignment editing adds points with a click and removes points with a right-click inside a box. Edits update immediately; points are saved in projects. Place grid restores automatic points and Clear points selects global-only alignment.
+- Local and Global frame ranking provide independent frame selection per point or a shared selection at every point. Global ranking and stacks without local points skip registration of discarded frames.
+- First frame and Last frame trim recordings for sample preview, stacking, and prepared SER export. Processing reports preserve original source frame numbers.
+- Optional missing-object and cut-off object rejection works before centering, checks crop boundaries, and applies to both stacking and prepared SER export. A detection box, automatic or manual brightness threshold, minimum object size, and preview rejection reason help review settings. Moon / Sun mode disables object rejection.
+- Gradient, Laplacian, Brenner, and Brightness quality estimators are available. Noise smoothing affects detail scoring only. Keep best is calculated after object rejection; reports include original source indices and rejection reasons.
+- The gridded quality graph can show best-to-worst ranking or recording order, with a corresponding selection threshold.
+- Ranked graphs omit rejected frames; recording-order graphs mark them in amber. All frame selection and detection settings are saved in projects and apply to sample previews and batch processing.
+
+The experimental neural wavelet sharpening prototype remains local and is not part of this release.
+
+Previous AI cleanup features:
 
 - Bundled MIT-licensed FFDNet color and monochrome models clean up noise after wavelets and deconvolution, before color/tone adjustments.
 - Strength and Noise level each have a slider and an exact-value field. Strength 0 disables cleanup; cleanup is off by default and stays off for old presets/projects.

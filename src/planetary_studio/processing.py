@@ -1,6 +1,6 @@
 """Streaming planetary preparation and lucky imaging with local alignment points."""
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 import json
 import math
@@ -15,6 +15,10 @@ from .ser import SerWriter
 
 class Cancelled(Exception):
     pass
+
+
+class FrameRejected(ValueError):
+    """A frame excluded by the user's object detection settings."""
 
 
 @dataclass
@@ -32,6 +36,17 @@ class StackOptions:
     max_local_shift: float = 8.0
     scale: float = 1.0
     normalize_brightness: bool = False
+    alignment_min_brightness: float = 0.1
+    manual_alignment_points: list[tuple[int, int]] | None = None
+    local_quality: bool = True
+    first_frame: int = 1
+    last_frame: int = 0
+    quality_method: str = "gradient"
+    quality_noise_sigma: float = 0.7
+    reject_missing_object: bool = False
+    reject_cutoff_object: bool = False
+    object_detection_threshold: float = 0.0
+    min_object_size: int = 15
 
     def validate(self):
         if not 0 < self.keep_percent <= 100:
@@ -46,6 +61,25 @@ class StackOptions:
             raise ValueError("Output scale must be 1, 1.5, or 2.")
         if self.crop_width < 0 or self.crop_height < 0:
             raise ValueError("Crop size cannot be negative.")
+        if not np.isfinite(self.alignment_min_brightness) or not 0 <= self.alignment_min_brightness <= 1:
+            raise ValueError("Minimum alignment brightness must be between 0 and 100%.")
+        if self.manual_alignment_points is not None:
+            for point in self.manual_alignment_points:
+                if (not isinstance(point, (list, tuple)) or len(point) != 2
+                        or any(not isinstance(v, (int, np.integer)) or v < 0 for v in point)):
+                    raise ValueError("Alignment points must contain nonnegative integer x and y coordinates.")
+        if (not isinstance(self.first_frame, int) or not isinstance(self.last_frame, int)
+                or self.first_frame < 1 or self.last_frame < 0
+                or (self.last_frame and self.last_frame < self.first_frame)):
+            raise ValueError("Frame range must start at 1 or later and end at or after its first frame.")
+        if self.quality_method not in ("gradient", "laplacian", "brenner", "brightness"):
+            raise ValueError("Choose Gradient, Laplacian, Brenner, or Brightness for quality estimation.")
+        if not np.isfinite(self.quality_noise_sigma) or not 0 <= self.quality_noise_sigma <= 3:
+            raise ValueError("Quality noise smoothing must be between 0 and 3 pixels.")
+        if not np.isfinite(self.object_detection_threshold) or not 0 <= self.object_detection_threshold <= 1:
+            raise ValueError("Object detection threshold must be between 0 and 100% (0 uses Auto).")
+        if not isinstance(self.min_object_size, int) or not 2 <= self.min_object_size <= 20000:
+            raise ValueError("Minimum object size must be between 2 and 20,000 pixels.")
 
 
 @dataclass
@@ -58,6 +92,11 @@ class StackResult:
     input_frames: int
     options: StackOptions
     sample_indices: list[int] | None = None
+    point_size: int = 0
+    source_indices: list[int] | None = None
+    source_count: int = 0
+    aligned_indices: list[int] | None = None
+    rejected_frames: dict[int, str] = field(default_factory=dict)
 
     def save(self, path, overwrite=False):
         path = Path(path)
@@ -70,10 +109,21 @@ class StackResult:
                 {
                     "application": "Planetary Studio",
                     "input_frames": self.input_frames,
+                    "source_frames": self.source_count or self.input_frames,
+                    "source_frame_indices": self.source_indices,
                     "globally_selected_frames": self.selected,
+                    "globally_selected_source_frames": [self.source_indices[i] for i in self.selected]
+                    if self.source_indices is not None else self.selected,
+                    "globally_aligned_frames": self.aligned_indices,
                     "quality": self.quality.tolist(),
+                    "frame_indices_are_zero_based": True,
+                    "rejected_source_frames": {
+                        str(self.source_indices[i] if self.source_indices is not None else i): reason
+                        for i, reason in self.rejected_frames.items()
+                    },
                     "shifts_xy": self.shifts,
                     "alignment_points_xy": self.alignment_points,
+                    "alignment_point_size_pixels": self.point_size,
                     "options": asdict(self.options),
                     "sample_source_frame_indices": self.sample_indices,
                     "output_scale": "Lanczos resampling (not drizzle)"
@@ -86,13 +136,56 @@ class StackResult:
         )
 
 
-def quality_score(image):
+def quality_score(image, method="gradient", noise_sigma=0.7):
     gray = luminance(image)
     # Suppress sensor noise before scoring spatial detail.
-    smooth = cv2.GaussianBlur(gray, (0, 0), 0.7)
-    gx = cv2.Sobel(smooth, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(smooth, cv2.CV_32F, 0, 1, ksize=3)
-    return float(np.mean(gx * gx + gy * gy))
+    smooth = cv2.GaussianBlur(gray, (0, 0), noise_sigma) if noise_sigma else gray
+    if method == "gradient":
+        gx = cv2.Sobel(smooth, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(smooth, cv2.CV_32F, 0, 1, ksize=3)
+        return float(np.mean(gx * gx + gy * gy))
+    if method == "laplacian":
+        return float(cv2.Laplacian(smooth, cv2.CV_32F, ksize=3).var())
+    if method == "brenner":
+        return float(np.mean((smooth[2:, :] - smooth[:-2, :]) ** 2) +
+                     np.mean((smooth[:, 2:] - smooth[:, :-2]) ** 2))
+    if method == "brightness":
+        # Useful for cloud attenuation, rather than a measure of sharp detail.
+        return float(gray.mean())
+    raise ValueError("Unknown quality estimator.")
+
+
+def detect_object(image, threshold=0.0, min_size=15):
+    """Return a largest-object box and intensity centroid, or None.
+
+    Detection uses calibrated luminance before centering or cropping. A robust
+    border noise estimate prevents blank noisy frames from looking like planets.
+    """
+    gray = luminance(image)
+    smooth = cv2.GaussianBlur(gray, (0, 0), 1.5)
+    h, w = gray.shape
+    edge = max(1, min(h, w) // 20)
+    border = np.concatenate((smooth[:edge].ravel(), smooth[-edge:].ravel(),
+                             smooth[:, :edge].ravel(), smooth[:, -edge:].ravel()))
+    background = float(np.median(border))
+    noise = 1.4826 * float(np.median(np.abs(border - background)))
+    peak = float(smooth.max())
+    floor = max(0.001, 5 * noise)
+    if not threshold and peak <= background + floor:
+        return None
+    level = threshold or background + max(floor, (peak - background) * 0.2)
+    mask = (smooth > level).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if count <= 1:
+        return None
+    label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    x, y, bw, bh, area = map(int, stats[label])
+    if min(bw, bh) < min_size or area < max(4, min_size * min_size * 0.2):
+        return None
+    weights = np.where(labels == label, np.maximum(smooth - background, 0), 0)
+    moments = cv2.moments(weights)
+    center = (moments["m10"] / moments["m00"], moments["m01"] / moments["m00"])
+    return (x, y, bw, bh), center
 
 
 def object_center(image):
@@ -135,7 +228,7 @@ def register(reference, frame):
 
 
 class Preprocessor:
-    def __init__(self, source, options: StackOptions):
+    def __init__(self, source, options: StackOptions, *, inspect_object=False):
         self.source, self.options = source, options
         self.bits = source.bits
         self.pattern = source.pattern if options.bayer == "AUTO" else options.bayer
@@ -144,8 +237,12 @@ class Preprocessor:
         self.dark = read_image(options.dark_path) if options.dark_path else None
         self.flat = read_image(options.flat_path) if options.flat_path else None
         self._shape = None
+        self.inspect_object = inspect_object
+        self.object_bounds = None
+        self.rejection_reason = ""
 
-    def read(self, index):
+    def read(self, index, *, enforce_rejection=True):
+        self.object_bounds, self.rejection_reason = None, ""
         raw = self.source.read(index)
         if self.pattern in ("RGGB", "GRBG", "GBRG", "BGGR") and raw.ndim == 3:
             # Video decoders expand raw grayscale AVI samples into three equal
@@ -181,35 +278,105 @@ class Preprocessor:
                 image = np.where(image > med + 0.15, med, image)
         if self.pattern in ("RGGB", "GRBG", "GBRG", "BGGR") and image.ndim == 2:
             image = normalized(debayer(np.rint(np.clip(image, 0, 1) * 65535).astype(np.uint16), self.pattern))
+        detection_enabled = self.options.center_object and (
+            self.inspect_object or self.options.reject_missing_object or self.options.reject_cutoff_object
+            or self.options.object_detection_threshold > 0)
+        detected = (detect_object(image, self.options.object_detection_threshold, self.options.min_object_size)
+                    if detection_enabled else None)
+        dx, dy = 0.0, 0.0
+        if detection_enabled:
+            if detected is None:
+                if self.options.reject_missing_object or self.options.reject_cutoff_object:
+                    self.rejection_reason = "Object missing or smaller than the minimum object size."
+            else:
+                self.object_bounds, _ = detected
+                bx, by, bw, bh = self.object_bounds
+                if self.options.reject_cutoff_object and (
+                        bx <= 1 or by <= 1 or bx + bw >= image.shape[1] - 1 or by + bh >= image.shape[0] - 1):
+                    self.rejection_reason = "Object cut off at the recording boundary."
         if self.options.center_object:
-            cx, cy = object_center(image)
-            image = warp_shift(image, (image.shape[1] - 1) / 2 - cx, (image.shape[0] - 1) / 2 - cy)
+            # Keep automatic centering identical when object filtering is off.
+            cx, cy = (detected[1] if detected is not None and
+                      (self.options.reject_missing_object or self.options.reject_cutoff_object
+                       or self.options.object_detection_threshold > 0) else object_center(image))
+            dx, dy = (image.shape[1] - 1) / 2 - cx, (image.shape[0] - 1) / 2 - cy
+            image = warp_shift(image, dx, dy)
         w = self.options.crop_width or image.shape[1]
         h = self.options.crop_height or image.shape[0]
         if w > image.shape[1] or h > image.shape[0]:
             raise ValueError("Crop size exceeds the sensor image size.")
         x, y = (image.shape[1] - w) // 2, (image.shape[0] - h) // 2
+        if self.object_bounds is not None:
+            bx, by, bw, bh = self.object_bounds
+            bx, by = bx + dx - x, by + dy - y
+            if self.options.reject_cutoff_object and not self.rejection_reason and (
+                    bx < 0 or by < 0 or bx + bw > w or by + bh > h):
+                self.rejection_reason = "Object cut off by the chosen crop size."
+            self.object_bounds = (bx, by, bw, bh)
         image = np.ascontiguousarray(image[y : y + h, x : x + w], dtype=np.float32)
         if min(h, w) < 8:
             raise ValueError("Images must be at least 8×8 pixels.")
         if self._shape is not None and image.shape != self._shape:
             raise ValueError("All input frames must have the same dimensions.")
         self._shape = image.shape
+        if enforce_rejection and self.rejection_reason:
+            raise FrameRejected(self.rejection_reason)
         return image
 
 
-def alignment_points(reference, size):
+def alignment_patch_size(reference, size):
+    """The engine uses even patches that fit inside the prepared image."""
+    return 2 * (min(size, *reference.shape[:2]) // 2)
+
+
+def alignment_points(reference, size, min_brightness=0.1):
     gray = luminance(reference)
     h, w = gray.shape
-    size = min(size, h, w)
+    size = alignment_patch_size(reference, size)
     radius, step = size // 2, max(8, size // 2)
+    smooth = cv2.GaussianBlur(gray, (0, 0), 0.8)
+    # Anchor the overlapping grid at the bright region, rather than the top-left
+    # of the sensor. Test each point's center separately from the whole patch.
+    weight = np.maximum(smooth - min_brightness, 0)
+    moments = cv2.moments(weight)
+    if moments["m00"] > 1e-8:
+        cx = int(round(moments["m10"] / moments["m00"]))
+        cy = int(round(moments["m01"] / moments["m00"]))
+    else:
+        cx, cy = w // 2, h // 2
+    xs = range(cx + math.ceil((radius - cx) / step) * step, w - radius + 1, step)
+    ys = range(cy + math.ceil((radius - cy) / step) * step, h - radius + 1, step)
     result = []
-    for y in range(radius, h - radius + 1, step):
-        for x in range(radius, w - radius + 1, step):
+    for y in ys:
+        for x in xs:
+            if float(np.median(smooth[max(0, y - 2):y + 3, max(0, x - 2):x + 3])) < min_brightness:
+                continue
             patch = gray[y - radius : y + radius, x - radius : x + radius]
             if float(patch.std()) > 0.005 and quality_score(patch) > 1e-6:
                 result.append((x, y))
     return result
+
+
+def planned_alignment_points(reference, options):
+    if not options.local_alignment:
+        return []
+    if options.manual_alignment_points is None:
+        return alignment_points(reference, options.alignment_size, options.alignment_min_brightness)
+    radius = alignment_patch_size(reference, options.alignment_size) // 2
+    h, w = reference.shape[:2]
+    points = list(dict.fromkeys(tuple(p) for p in options.manual_alignment_points))
+    if any(not (radius <= x <= w - radius and radius <= y <= h - radius) for x, y in points):
+        raise ValueError("An alignment point falls outside the prepared image. Regenerate the grid or move the point inward.")
+    return points
+
+
+def input_frame_range(count, options):
+    """Return zero-based source indices from the inclusive UI frame range."""
+    first = options.first_frame - 1
+    end = min(options.last_frame or count, count)
+    if first >= end:
+        raise ValueError(f"The selected frame range is empty. This recording contains {count:,} frames.")
+    return range(first, end)
 
 
 def stack_source(path, options: StackOptions | None = None, progress=None, cancel=None,
@@ -225,26 +392,46 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
 
     source = open_source(path)
     try:
+        source_count = source.count
+        eligible = input_frame_range(source_count, options)
         if frame_indices is not None:
+            if any(i not in eligible for i in frame_indices):
+                raise ValueError("A preview sample frame lies outside the selected frame range.")
             source = IndexedSource(source, frame_indices)
+            source_indices = list(frame_indices)
+        elif len(eligible) != source_count:
+            source_indices = list(eligible)
+            source = IndexedSource(source, source_indices)
+        else:
+            source_indices = None
         prep = Preprocessor(source, options)
         n = source.count
         scores = np.zeros(n, np.float32)
+        rejected = {}
         best, best_index, best_score = None, 0, -1
         for i in range(n):
             check()
-            frame = prep.read(i)
-            score = quality_score(frame)
+            try:
+                frame = prep.read(i)
+            except FrameRejected as exc:
+                rejected[i] = str(exc)
+                progress(15 * (i + 1) / n, f"Rejected frame {i + 1} of {n}: {exc}")
+                continue
+            score = quality_score(frame, options.quality_method, options.quality_noise_sigma)
             scores[i] = score
             if score > best_score:
                 best, best_index, best_score = frame, i, score
             progress(15 * (i + 1) / n, f"Assessing frame {i + 1} of {n}")
+        accepted = np.array([i for i in range(n) if i not in rejected], dtype=int)
+        if not len(accepted):
+            raise ValueError("Every frame was rejected. Preview a frame and adjust the detection threshold, minimum object size, or crop; or turn off object rejection.")
         if best_score <= 1e-10:
             raise ValueError("No usable image detail found in this recording.")
-        keep = max(1, math.ceil(n * options.keep_percent / 100))
-        selected = sorted(np.argsort(-scores, kind="stable")[:keep].tolist())
+        keep = max(1, math.ceil(len(accepted) * options.keep_percent / 100))
+        ranked = accepted[np.argsort(-scores[accepted], kind="stable")]
+        selected = sorted(ranked[:keep].tolist())
         # Build a low-noise reference from the best frames after global registration.
-        reference_indices = np.argsort(-scores, kind="stable")[: min(32, keep)]
+        reference_indices = ranked[: min(32, keep)]
         ref_sum = np.zeros_like(best, dtype=np.float64)
         ref_weight = np.zeros(best.shape[:2], dtype=np.float64)
         for j, i in enumerate(reference_indices):
@@ -261,21 +448,27 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
         reference = np.divide(ref_sum, divisor, out=np.zeros_like(ref_sum), where=divisor > 0).astype(
             np.float32
         )
-        points = alignment_points(reference, options.alignment_size) if options.local_alignment else []
-        radius = min(options.alignment_size, *reference.shape[:2]) // 2
+        points = planned_alignment_points(reference, options)
+        radius = alignment_patch_size(reference, options.alignment_size) // 2
         shifts = [(0.0, 0.0)] * n
         local_scores = np.zeros((n, len(points)), np.float32)
         valid_frames = np.zeros(n, bool)
-        for i in range(n):
+        # Local quality needs to rank every frame at each point. Global quality
+        # uses the same selected frames at every point and can skip the rest.
+        alignment_indices = accepted.tolist() if points and options.local_quality else selected
+        for j, i in enumerate(alignment_indices):
             check()
             frame = prep.read(i)
             dx, dy, response = register(reference, frame)
             valid_frames[i] = response >= 0.02 or i == best_index
             shifts[i] = (dx, dy)
             moved = warp_shift(frame, dx, dy)
-            for p, (x, y) in enumerate(points):
-                local_scores[i, p] = quality_score(moved[y - radius : y + radius, x - radius : x + radius])
-            progress(25 + 25 * (i + 1) / n, f"Aligning frame {i + 1} of {n}")
+            if options.local_quality:
+                for p, (x, y) in enumerate(points):
+                    local_scores[i, p] = quality_score(moved[y - radius : y + radius, x - radius : x + radius],
+                                                     options.quality_method, options.quality_noise_sigma)
+            progress(25 + 25 * (j + 1) / len(alignment_indices),
+                     f"Aligning selected frame {j + 1} of {len(alignment_indices)}")
         valid_indices = np.flatnonzero(valid_frames)
         if not len(valid_indices):
             raise ValueError("Alignment failed for every frame.")
@@ -285,7 +478,8 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
         )
         membership = np.zeros((n, len(points)), bool)
         for p in range(len(points)):
-            indices = valid_indices[np.argsort(-local_scores[valid_indices, p], kind="stable")[:global_keep]]
+            indices = (valid_indices[np.argsort(-local_scores[valid_indices, p], kind="stable")[:global_keep]]
+                       if options.local_quality else selected)
             membership[indices, p] = True
         global_sum = np.zeros_like(reference, dtype=np.float64)
         global_weight = np.zeros(reference.shape[:2], np.float64)
@@ -338,9 +532,11 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
                 result, (round(w * options.scale), round(h * options.scale)), interpolation=cv2.INTER_LANCZOS4
             )
             result = np.clip(result, 0, 1)
-        progress(100, f"Stacked {len(selected)} of {n} frames")
+        progress(100, f"Stacked {len(selected)} of {len(accepted)} usable frames; {len(rejected)} rejected")
         return StackResult(result, scores, selected, shifts, points, n, options,
-                           list(frame_indices) if frame_indices is not None else None)
+                           list(frame_indices) if frame_indices is not None else None, point_size=2 * radius,
+                           source_indices=source_indices, source_count=source_count,
+                           aligned_indices=list(alignment_indices), rejected_frames=rejected)
     finally:
         source.close()
 
@@ -356,20 +552,36 @@ def export_prepared(path, output, options=None, progress=None, cancel=None, *, o
     options = options or StackOptions()
     options.validate()
     source = open_source(path)
+    writer = None
     try:
         protect_source_output(source, output)
+        if Path(output).exists() and not overwrite:
+            raise FileExistsError("Output recording already exists.")
+        indices = input_frame_range(source.count, options)
+        if len(indices) != source.count:
+            source = IndexedSource(source, indices)
         prep = Preprocessor(source, options)
-        first = prep.read(0)
-        with SerWriter(output, first.shape, 16, "RGB" if first.ndim == 3 else "MONO",
-                       overwrite=overwrite) as writer:
-            for i in range(source.count):
-                if cancel and cancel.is_set():
-                    raise Cancelled("Export cancelled; partial recording has been finalized.")
-                frame = first if i == 0 else prep.read(i)
+        rejected = 0
+        for i in range(source.count):
+            if cancel and cancel.is_set():
+                raise Cancelled("Export cancelled; partial recording has been finalized.")
+            try:
+                frame = prep.read(i)
+            except FrameRejected:
+                rejected += 1
+            else:
+                if writer is None:
+                    writer = SerWriter(output, frame.shape, 16, "RGB" if frame.ndim == 3 else "MONO",
+                                       overwrite=overwrite)
                 writer.write(np.rint(np.clip(frame, 0, 1) * 65535).astype(np.uint16))
-                if progress:
-                    progress(100 * (i + 1) / source.count, f"Prepared frame {i + 1} of {source.count}")
+            if progress:
+                progress(100 * (i + 1) / source.count,
+                         f"Prepared {i + 1 - rejected} frames; rejected {rejected}")
+        if writer is None:
+            raise ValueError("Every frame was rejected. Adjust the object detection settings before exporting.")
     finally:
+        if writer is not None:
+            writer.close()
         source.close()
 
 

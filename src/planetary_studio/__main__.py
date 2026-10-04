@@ -28,6 +28,16 @@ def main(argv=None):
     stack.add_argument("--dark", default="")
     stack.add_argument("--flat", default="")
     stack.add_argument("--scale", type=float, choices=[1, 1.5, 2], default=1)
+    stack.add_argument("--first-frame", type=int, default=1)
+    stack.add_argument("--last-frame", type=int, default=0, help="Inclusive last frame; 0 uses the recording's end")
+    stack.add_argument("--quality", choices=["gradient", "laplacian", "brenner", "brightness"], default="gradient")
+    stack.add_argument("--quality-noise", type=float, default=.7, help="Quality-only smoothing in pixels")
+    stack.add_argument("--global-ranking", action="store_true", help="Use the same best frames at every alignment point")
+    stack.add_argument("--ap-min-brightness", type=float, default=10, help="Minimum automatic point brightness in percent")
+    stack.add_argument("--reject-missing", action="store_true")
+    stack.add_argument("--reject-cutoff", action="store_true")
+    stack.add_argument("--object-threshold", type=float, default=0, help="Object detection brightness in percent; 0 uses Auto")
+    stack.add_argument("--min-object-size", type=int, default=15)
     probe = sub.add_parser("probe-camera", help="Capture raw frames from a directly connected UVC camera")
     probe.add_argument("name", help="Camera name substring")
     probe.add_argument("output", help="New SER recording path")
@@ -61,6 +71,16 @@ def main(argv=None):
                 dark_path=args.dark,
                 flat_path=args.flat,
                 scale=args.scale,
+                first_frame=args.first_frame,
+                last_frame=args.last_frame,
+                quality_method=args.quality,
+                quality_noise_sigma=args.quality_noise,
+                local_quality=not args.global_ranking,
+                alignment_min_brightness=args.ap_min_brightness / 100,
+                reject_missing_object=args.reject_missing,
+                reject_cutoff_object=args.reject_cutoff,
+                object_detection_threshold=args.object_threshold / 100,
+                min_object_size=args.min_object_size,
             )
             result = stack_source(
                 args.input, options, lambda percent, text: print(f"{percent:.0f}% {text}", flush=True)

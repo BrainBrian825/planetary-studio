@@ -54,6 +54,19 @@ Use **Preview sample** to stack 2–64 evenly spaced frames (12 by default) with
 
 The quality graph has percentage grid lines, relative quality labels, and a **Keep best** cutoff marker. **Show alignment points in preview** overlays the planned patch areas without changing image pixels. The main stack/export/sharpen actions remain visible below the settings panel.
 
+### Frame selection and alignment controls
+
+- **First frame / Last frame** trim a recording before sample previews, stacking, and prepared SER export. Frame numbers start at 1; Last frame uses the recording's end by default. Reports retain the original source frame numbers.
+- **Object detection** can reject missing or cut-off planets before stacking or prepared export. **Show detected object** displays a dashed amber box in Prepared frame view; a rejection message explains why that frame will be excluded. Auto estimates background/noise for each frame. **Detection threshold** sets a fixed brightness percentage and **Minimum object size** ignores small detections. Detection runs before centering; cut-off rejection checks both the recording boundary and the chosen crop. Rejection is off by default and disabled in Moon / Sun mode. Keep best uses the accepted frame count. These checks cannot guarantee that every faint limb or ring has been detected; inspect representative previews when choosing thresholds.
+- **Quality estimator** offers Gradient (default), Laplacian, Brenner two-pixel contrast, and Brightness. The first three measure spatial detail with different sensitivities; Brightness can reject cloud attenuation but does not measure sharpness. **Quality noise smoothing** affects scoring only; it does not blur the stacked output. The selected estimator is used for both whole-frame and local rankings.
+- **Minimum brightness** sets the center brightness required for automatic alignment points, as a percentage of full scale. It is independent of Brighten preview. Lower it for dim targets; raise it to avoid dark background. The grid is centered on the bright region and still requires image detail inside each patch.
+- **Edit alignment points** enables clicking to add and right-clicking inside a box to remove its nearest point in Prepared frame view. **Place grid** restores automatic placement; **Clear points** uses global alignment without local patches. Manually placed points may cover dim features below the automatic threshold. Points are saved in projects. Changing crop dimensions, target, Bayer pattern, or point size resets the manual grid to keep its coordinates valid.
+- Boxes show the actual patch dimensions used by the engine, including small or odd crops and output enlargement. The center dot marks the point's location. Manual edits update immediately without reading the frame again.
+- **Frame ranking → Local** selects the best frames separately at each point. **Global** uses the same selected frames at every point and can help with patch seams; it avoids globally registering discarded frames. Recordings without local points also align only selected frames.
+- **Quality graph → Recording order** shows changes across the included frames, with rejected frames marked in amber; **Best to worst** ranks accepted frames. The recording-order graph shows a horizontal selection threshold calculated from accepted frames.
+
+The frame range and object controls are informed by the [PIPP manual](https://astrowhat.com/resources/planetary-image-preprocessor-pipp-manual.345/download); point editing and local/global ranking are informed by the [AutoStakkert guide](https://www.astrokraai.nl/software/manual/as2_planet.html). Comparison of several stack percentages in one analysis and multiple point sizes for large and small features are possible next additions and are not yet implemented. The quality estimators are independent implementations, not replicas of PIPP's Ninox-based scoring.
+
 Raw grayscale AVI files may contain Bayer samples without a pattern tag. Select the appropriate Bayer pattern and compare its preview; AUTO cannot determine the camera or any recording flips from an untagged file. Already converted color images should use AUTO.
 
 All file pickers start in the last folder you selected in the app, and remember it across restarts. Save dialogs honor **Replace** for existing outputs; processing exports require a different file from the source recording or images.
@@ -77,8 +90,8 @@ All file pickers start in the last folder you selected in the app, and remember 
 - Internal processing uses normalized float32; stack accumulation uses float64. Raw capture remains unsigned 8/16-bit.
 - SER files are memory mapped. Processing reads frames in passes instead of retaining the complete recording in RAM. Quality metadata is proportional to frame count × alignment point count. Video seeking and raw disk bandwidth still affect speed.
 - Global alignment uses phase correlation and a reference built from the best frames. Local points use overlapping feathered patches and independent frame ranking. Texture-free areas fall back to the global stack.
-- Quality is gradient energy after mild noise smoothing. Extremely noisy or saturated data can still affect rankings. Exposure normalization is optional.
-- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented in 0.4.**
+- Quality defaults to gradient energy after mild noise smoothing; Laplacian variance, two-axis Brenner contrast, and mean brightness are alternatives. Extremely noisy or saturated data can still affect rankings. Exposure normalization is optional.
+- 1.5× and 2× outputs use Lanczos resampling. **Drizzle reconstruction, planetary rotational derotation, GPU processing, and advanced atmospheric-dispersion modeling are not implemented.**
 - The engine is independently implemented; it does not contain AutoStakkert or waveSharp code. There has been no claim of numerical equivalence to their algorithms.
 
 ## Build or run from source
