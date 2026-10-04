@@ -105,24 +105,34 @@ def test_desktop_scaled_point_editing_and_project_round_trip(tmp_path, monkeypat
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     assert window.options().quality_noise_sigma == .7
-    window.resize(1240, 830)
-    window.nav.setCurrentRow(1)
-    window.show()
-    app.processEvents()
-    panel = window.pages.widget(1).findChild(QScrollArea)
-    assert panel.horizontalScrollBar().maximum() == 0
-    panel.setFixedWidth(400)
-    window.resize(1000, 640)
-    app.processEvents()
-    assert panel.horizontalScrollBar().maximum() == 0
-    def until(predicate):
+    def until(predicate, diagnostic=""):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not predicate():
             app.processEvents()
             time.sleep(.01)
-        assert predicate()
+        assert predicate(), diagnostic() if callable(diagnostic) else diagnostic
     path = recording(tmp_path / "desktop.ser")
     try:
+        window.resize(1240, 830)
+        window.nav.setCurrentRow(1)
+        window.show()
+        panel = window.pages.widget(1).findChild(QScrollArea)
+        def layout_diagnostic():
+            from PySide6.QtWidgets import QWidget
+            return {
+                'panel_width': panel.width(), 'scroll': panel.horizontalScrollBar().maximum(),
+                'contents_width': panel.widget().width(),
+                'widest_children': sorted([
+                    (w.minimumSizeHint().width(), type(w).__name__, w.accessibleName(),
+                     w.text() if hasattr(w, 'text') else '', w.width())
+                    for w in panel.findChildren(QWidget)
+                ], reverse=True)[:12],
+            }
+        # Native styles may finish font/layout events after the first event pass.
+        until(lambda: panel.horizontalScrollBar().maximum() == 0, layout_diagnostic)
+        panel.setFixedWidth(400)
+        window.resize(1000, 640)
+        until(lambda: panel.horizontalScrollBar().maximum() == 0, layout_diagnostic)
         window.set_source(str(path))
         window.ap_size.setValue(32)
         window.scale_combo.setCurrentIndex(2)
