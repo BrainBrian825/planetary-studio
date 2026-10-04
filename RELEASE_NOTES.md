@@ -3,7 +3,7 @@ Planetary Studio 0.5.1 adds recording filters, quality choices, and alignment co
 - Page headings use Capture, Prepare & Stack, Sharpen, Batch Queue, and Camera support, with direct descriptions of their controls.
 - Minimum brightness filters automatic alignment point centers using real image brightness; the grid is centered on the bright region. Preview display stretching does not affect placement.
 - Alignment boxes use the actual even patch size after small/odd crops and output enlargement. Center markers make their positions clear.
-- Manual alignment editing adds points with a click and removes points with a right-click inside a box. Edits update immediately; points are saved in projects. Place grid restores automatic points and Clear points selects global-only alignment.
+- Manual alignment editing adds points with a click and removes points with a right-click inside a box. Edits update immediately; points are saved in projects. Auto grid restores automatic points and Clear selects global-only alignment.
 - Local and Global frame ranking provide independent frame selection per point or a shared selection at every point. Global ranking and stacks without local points skip registration of discarded frames.
 - First frame and Last frame trim recordings for sample preview, stacking, and prepared SER export. Processing reports preserve original source frame numbers.
 - Optional missing-object and cut-off object rejection works before centering, checks crop boundaries, and applies to both stacking and prepared SER export. A detection box, automatic or manual brightness threshold, minimum object size, and preview rejection reason help review settings. Moon / Sun mode disables object rejection.
