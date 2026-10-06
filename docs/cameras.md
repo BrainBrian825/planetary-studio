@@ -4,7 +4,7 @@
 
 Choose **Scan cameras → NexImage 10 [UVC] → Connect**. Select a raw GRBG mode and start preview. Capture records the raw mosaic; the preview debayers it to RGB.
 
-Choose resolution, Color or Mono, bit depth, and frame rate independently. The app filters later choices to the modes reported by the camera. A Color choice uses raw GRBG when available. The frame rate slider steps through advertised rates; exposure and gain sliders use the driver's actual limits, with numeric fields for precise values. The capture statistics show the measured frame rate. Disconnect before changing capture format.
+Choose resolution, Color or Mono, bit depth, and frame rate independently. The app filters later choices to the modes reported by the camera. A Color choice uses raw GRBG when available. The frame rate slider steps through advertised rates; exposure and gain sliders use the driver's actual limits, with numeric fields for precise values. The capture statistics show the measured frame rate. **Stop live view** before changing capture format, then **Start live view**. The USB camera handle remains open; exposure/gain settings are retained. Stopping live view finalizes an active recording. System camera connections pause reads while retaining their OpenCV connection; INDI/Alpaca abort a pending exposure while retaining their server connection.
 
 The camera identifies as USB vendor `199e`, product `8619` and exposes frame-based descriptors. This is different from cameras that expose only uncompressed UVC descriptors. The native bridge negotiates the advertised descriptor directly and preserves the exact frame interval.
 

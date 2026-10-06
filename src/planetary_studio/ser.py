@@ -151,12 +151,15 @@ class SerWriter:
     def close(self):
         if self._file.closed:
             return
-        self._file.seek(HEADER.size + self.count * int(np.prod(self.shape)) * (1 if self.bits <= 8 else 2))
-        self._file.write(np.asarray(self.timestamps, dtype="<u8").tobytes())
-        self._write_header()
-        self._file.flush()
-        os.fsync(self._file.fileno())
-        self._file.close()
+        try:
+            self._file.seek(HEADER.size + self.count * int(np.prod(self.shape)) * (1 if self.bits <= 8 else 2))
+            self._file.write(np.asarray(self.timestamps, dtype="<u8").tobytes())
+            self._file.truncate()
+            self._write_header()
+            self._file.flush()
+            os.fsync(self._file.fileno())
+        finally:
+            self._file.close()
 
     def __enter__(self):
         return self

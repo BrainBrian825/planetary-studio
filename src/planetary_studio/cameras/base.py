@@ -6,6 +6,10 @@ class CameraError(RuntimeError):
     pass
 
 
+class InvalidFrameError(CameraError):
+    """A damaged individual frame; the camera connection is still usable."""
+
+
 @dataclass
 class Device:
     backend: str
@@ -44,6 +48,10 @@ class Camera:
         raise NotImplementedError
 
     def read(self, timeout=1000):
+        raise NotImplementedError
+
+    def stop(self):
+        """Stop acquisition while retaining the camera connection and controls."""
         raise NotImplementedError
 
     def controls(self):

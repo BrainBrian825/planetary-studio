@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 import cv2
 import numpy as np
-from .base import Camera, CameraError, Device, Mode, Frame
+from .base import Camera, CameraError, InvalidFrameError, Device, Mode, Frame
 
 
 class _Device(C.Structure):
@@ -62,6 +62,8 @@ def _library():
     lib.ps_modes.restype = C.c_int
     lib.ps_start.argtypes = [C.c_void_p, C.POINTER(_Mode)]
     lib.ps_start.restype = C.c_int
+    lib.ps_stop.argtypes = [C.c_void_p]
+    lib.ps_stop.restype = None
     lib.ps_read.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t, C.POINTER(_Frame), C.c_int]
     lib.ps_read.restype = C.c_int
     lib.ps_control.argtypes = [C.c_void_p, C.c_int, C.c_int]
@@ -163,6 +165,7 @@ class UvcCamera(Camera):
         return sorted(result, key=lambda m: (m.width * m.height, m.bits, m.format != "GRBG", -m.fps))
 
     def start(self, mode):
+        self.stop()
         self.mode = mode
         self.buffer = C.create_string_buffer(mode.width * mode.height * 6 + 65536)
         _check(
@@ -176,38 +179,60 @@ class UvcCamera(Camera):
         result = self.lib.ps_read(self.handle, self.buffer, len(self.buffer), C.byref(meta), timeout)
         if result == 0:
             return None
+        if result == -2:
+            raise InvalidFrameError(f"Camera frame exceeds the receive buffer ({meta.bytes:,} bytes).")
         if result < 0:
             raise CameraError(
-                "UVC frame transfer failed or exceeded its buffer. Reconnect and choose another mode."
+                "UVC frame transfer failed. Check the USB cable and available memory."
             )
         code, mode = self.mode.details["fourcc"], self.mode
-        data = np.frombuffer(self.buffer, np.uint8, count=meta.bytes).copy()
         h, w = mode.height, mode.width
+        if (meta.width, meta.height) != (w, h):
+            raise InvalidFrameError(
+                f"Camera delivered {meta.width} × {meta.height}; expected {w} × {h} ({code})."
+            )
+        if meta.bytes > len(self.buffer):
+            raise InvalidFrameError("Camera reported a frame larger than its receive buffer.")
+        data = np.frombuffer(self.buffer, np.uint8, count=meta.bytes).copy()
         if code == "MJPG":
             image = cv2.imdecode(data, cv2.IMREAD_COLOR)
             if image is None:
-                raise CameraError("Camera sent an invalid MJPEG frame.")
+                raise InvalidFrameError("Camera sent an invalid MJPEG frame.")
+            if image.shape[:2] != (h, w):
+                raise InvalidFrameError("MJPEG dimensions do not match the selected camera mode.")
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         elif code in ("YUY2", "YUYV", "UYVY"):
             if data.size != h * w * 2:
-                raise CameraError("Incomplete YUV frame received.")
+                raise InvalidFrameError(f"Incomplete YUV frame: {data.size:,} of {h * w * 2:,} bytes.")
             image = cv2.cvtColor(
                 data.reshape(h, w, 2), cv2.COLOR_YUV2RGB_UYVY if code == "UYVY" else cv2.COLOR_YUV2RGB_YUY2
             )
         elif code == "NV12":
+            if h % 2 or w % 2 or data.size != h * w * 3 // 2:
+                raise InvalidFrameError("Incomplete or invalid NV12 frame received.")
             image = cv2.cvtColor(data.reshape(h * 3 // 2, w), cv2.COLOR_YUV2RGB_NV12)
         else:
             channels = 3 if code in ("RGB3", "BGR3") else 1
             dtype = np.dtype("<u2" if mode.bits > 8 else "u1")
             rowbytes = w * channels * dtype.itemsize
             stride = meta.step if meta.step >= rowbytes else rowbytes
-            if meta.bytes < h * stride:
-                raise CameraError("Incomplete raw camera frame received.")
-            image = data[: h * stride].reshape(h, stride)[:, :rowbytes].copy().view(dtype)
+            # Padding after the final row is optional; do not discard valid pixels.
+            required = (h - 1) * stride + rowbytes
+            if meta.bytes < required:
+                raise InvalidFrameError(
+                    f"Incomplete {mode.bits}-bit {code} frame at {w} × {h}: "
+                    f"{meta.bytes:,} of {required:,} bytes."
+                )
+            image = np.ndarray((h, rowbytes), np.uint8, buffer=data, strides=(stride, 1)).copy().view(dtype)
             image = image.reshape((h, w, channels) if channels > 1 else (h, w))
             if code == "BGR3":
                 image = image[..., ::-1].copy()
         return Frame(image, mode.format, mode.bits, meta.dropped)
+
+    def stop(self):
+        if self.handle:
+            self.lib.ps_stop(self.handle)
+        self.buffer = None
 
     def controls(self):
         result = {}

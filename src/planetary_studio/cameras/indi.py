@@ -174,7 +174,7 @@ class IndiCamera(Camera):
         ]
 
     def start(self, mode):
-        pass
+        self.stop()
 
     def read(self, timeout=1000):
         if not self.pending:
@@ -206,10 +206,14 @@ class IndiCamera(Camera):
     def set_control(self, name, value):
         self.exposure = value / 1000
 
-    def close(self):
+    def stop(self):
         if self.pending:
-            try:
-                self.client.set_vector(self.device.id, "CCD_ABORT_EXPOSURE", {"ABORT": "On"}, "Switch")
-            except CameraError:
-                pass
-        self.client.close()
+            self.client.set_vector(self.device.id, "CCD_ABORT_EXPOSURE", {"ABORT": "On"}, "Switch")
+            self.pending = False
+        self.client.blobs.clear()
+
+    def close(self):
+        try:
+            self.stop()
+        finally:
+            self.client.close()

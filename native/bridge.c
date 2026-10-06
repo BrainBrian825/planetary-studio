@@ -132,10 +132,29 @@ int ps_start(ps_session *s, const ps_mode *mode) {
   ctrl.dwFrameInterval = mode->interval;
   error = uvc_probe_stream_ctrl(s->handle, &ctrl);
   if (error) return error;
+  pthread_mutex_lock(&s->mutex);
+  memset(&s->meta, 0, sizeof(s->meta));
+  s->consumed = 0;
+  s->failed = 0;
   s->running = 1;
+  pthread_mutex_unlock(&s->mutex);
   error = uvc_start_streaming(s->handle, &ctrl, ps_callback, s, 0);
-  if (error) s->running = 0;
+  if (error) {
+    pthread_mutex_lock(&s->mutex);
+    s->running = 0;
+    pthread_mutex_unlock(&s->mutex);
+  }
   return error;
+}
+
+void ps_stop(ps_session *s) {
+  if (!s) return;
+  if (s->running) uvc_stop_streaming(s->handle);
+  pthread_mutex_lock(&s->mutex);
+  s->running = 0;
+  s->consumed = s->meta.sequence;
+  pthread_cond_signal(&s->cond);
+  pthread_mutex_unlock(&s->mutex);
 }
 
 int ps_read(ps_session *s, void *out, size_t capacity, ps_frame *meta, int timeout_ms) {
@@ -152,7 +171,11 @@ int ps_read(ps_session *s, void *out, size_t capacity, ps_frame *meta, int timeo
   }
   if (s->failed || !s->running) { pthread_mutex_unlock(&s->mutex); return -1; }
   *meta = s->meta;
-  if (capacity < s->meta.bytes) { pthread_mutex_unlock(&s->mutex); return -2; }
+  if (capacity < s->meta.bytes) {
+    s->consumed = s->meta.sequence;
+    pthread_mutex_unlock(&s->mutex);
+    return -2;
+  }
   memcpy(out, s->data, s->meta.bytes);
   s->consumed = s->meta.sequence;
   pthread_mutex_unlock(&s->mutex);
@@ -197,7 +220,7 @@ int ps_control_range(ps_session *s, int control, double *minimum, double *maximu
 
 void ps_close(ps_session *s) {
   if (!s) return;
-  if (s->running) uvc_stop_streaming(s->handle);
+  ps_stop(s);
   uvc_close(s->handle);
   uvc_exit(s->ctx);
   pthread_cond_destroy(&s->cond);

@@ -124,6 +124,12 @@ def run_self_test(report_path=None):
         selected = window.mode_selector.selected_mode()
         assert selected.format == "MONO" and selected.bits == 8 and selected.fps == 60
         checks.append("Logo loading, independent capture selectors, and sensor slider widgets")
+        window.camera_state_changed(True, False)
+        assert not window.mode_selector.isEnabled() and window.preview_button.text() == "Stop live view"
+        window.camera_state_changed(False, False)
+        assert window.mode_selector.isEnabled() and not window.record_button.isEnabled()
+        assert window.preview_button.text() == "Start live view"
+        checks.append("Stop live view unlocks format controls while the camera stays connected")
         window.resize(1240, 830)
         window.set_source(str(path))
         window.ap_min_brightness.set_value(12.5)

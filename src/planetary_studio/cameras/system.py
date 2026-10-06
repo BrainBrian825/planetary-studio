@@ -48,3 +48,7 @@ class SystemCamera(Camera):
 
     def close(self):
         self.cap.release()
+
+    def stop(self):
+        # The worker stops reading. OpenCV retains the system-driver connection.
+        pass

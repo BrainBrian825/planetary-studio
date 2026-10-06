@@ -139,6 +139,7 @@ class QhyCamera(Camera):
         return [Mode(w, h, 30, self.pattern, bit) for w, h in sizes for bit in bits]
 
     def start(self, mode):
+        self.stop()
         self.mode = mode
         check(self.lib.SetQHYCCDBitsMode(self.handle, mode.bits), "bit depth")
         x, y = ((self.w.value - mode.width) // 2) // 2 * 2, ((self.h.value - mode.height) // 2) // 2 * 2
@@ -180,10 +181,16 @@ class QhyCamera(Camera):
         control, scale = self._types[name]
         check(self.lib.SetQHYCCDParam(self.handle, control, value * scale), name)
 
+    def stop(self):
+        if self.handle and self.started:
+            check(self.lib.StopQHYCCDLive(self.handle), "stream stop")
+            self.started = False
+
     def close(self):
-        if self.handle:
-            if self.started:
-                self.lib.StopQHYCCDLive(self.handle)
-            self.lib.CloseQHYCCD(self.handle)
-            self.handle = None
-        self.lib.ReleaseQHYCCDResource()
+        try:
+            self.stop()
+        finally:
+            if self.handle:
+                self.lib.CloseQHYCCD(self.handle)
+                self.handle = None
+            self.lib.ReleaseQHYCCDResource()

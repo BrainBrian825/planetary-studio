@@ -132,6 +132,7 @@ class AlpacaCamera(Camera):
         return [Mode(self.width, self.height, 1, "RGB" if self.sensor == 1 else self.pattern, self.bits)]
 
     def start(self, mode):
+        self.stop()
         for key, value in [
             ("binx", 1),
             ("biny", 1),
@@ -180,10 +181,16 @@ class AlpacaCamera(Camera):
     def set_control(self, name, value):
         self.exposure = value / 1000
 
+    def stop(self):
+        if self.pending:
+            self.call("abortexposure", "PUT")
+            self.pending = False
+
     def close(self):
         try:
-            if self.pending:
-                self.call("abortexposure", "PUT")
-            self.call("connected", "PUT", {"Connected": False})
-        except CameraError:
-            pass
+            self.stop()
+        finally:
+            try:
+                self.call("connected", "PUT", {"Connected": False})
+            except CameraError:
+                pass

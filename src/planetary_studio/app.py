@@ -112,8 +112,11 @@ class MainWindow(QMainWindow):
         self.resize(1240, 830)
         self.setMinimumSize(1000, 640)
         self.settings = QSettings("PlanetaryStudio", "PlanetaryStudio")
+        from .diagnostics import DiagnosticLog
+        self.diagnostic_log = DiagnosticLog(self.settings)
         self.camera_settings = json.loads(self.settings.value("camera_settings", "{}"))
         self.camera_worker, self.job, self.scan_worker = None, None, None
+        self.capture_streaming, self.capture_pending, self.capture_has_frame = False, False, False
         self.devices, self.source_path, self.result = [], None, None
         self.original, self.finished_image, self.last_capture_image = None, None, None
         self.sharpen_sample_indices = None
@@ -211,6 +214,7 @@ class MainWindow(QMainWindow):
         self.sharpen_timer.setInterval(250)
         self.sharpen_timer.timeout.connect(self.update_sharpen)
         self.sharpen_worker = None
+        self.log(f"Planetary Studio {__version__} started")
 
     def appearance_changed(self, mode):
         with QSignalBlocker(self.appearance_combo):
@@ -224,8 +228,9 @@ class MainWindow(QMainWindow):
 
     def log(self, message):
         self.statusBar().showMessage(message, 20000)
+        line = self.diagnostic_log.append(message)
         if hasattr(self, "diagnostics"):
-            self.diagnostics.appendPlainText(time.strftime("%H:%M:%S") + "  " + message)
+            self.diagnostics.appendPlainText(line)
 
     def build_capture(self):
         page, layout = page_layout(
@@ -257,7 +262,7 @@ class MainWindow(QMainWindow):
         camera.layout().addWidget(self.connect_button)
         self.mode_selector = CameraModeSelector()
         camera.layout().addWidget(self.mode_selector)
-        self.preview_button = button("Start live preview", self.start_preview, True)
+        self.preview_button = button("Start live view", self.start_preview, True)
         self.preview_button.setEnabled(False)
         camera.layout().addWidget(self.preview_button)
         pl.addWidget(camera)
@@ -349,6 +354,7 @@ class MainWindow(QMainWindow):
         self.camera_worker = CameraWorker(device)
         self.camera_worker.ready.connect(self.camera_ready)
         self.camera_worker.preview.connect(self.camera_preview)
+        self.camera_worker.capture_state.connect(self.camera_state_changed)
         self.camera_worker.status.connect(self.log)
         self.camera_worker.failed.connect(self.error)
         self.camera_worker.recorded.connect(self.recording_saved)
@@ -356,7 +362,9 @@ class MainWindow(QMainWindow):
         self.camera_worker.start()
 
     def camera_ready(self, modes, controls):
+        self.capture_streaming, self.capture_pending, self.capture_has_frame = False, False, False
         self.mode_selector.set_modes(modes)
+        self.preview_button.setText("Start live view")
         self.preview_button.setEnabled(True)
         self.connect_button.setText("Disconnect")
         self.connect_button.setEnabled(True)
@@ -372,23 +380,50 @@ class MainWindow(QMainWindow):
                 )
             )
             self.controls_form.addRow(name, control)
-        self.log("Camera connected. Choose resolution, color, bit depth, and frame rate, then start preview.")
+        self.log("Camera connected. Choose capture settings, then start live view. Stop live view to change settings.")
 
     def start_preview(self):
         mode = self.mode_selector.selected_mode()
         if self.camera_worker and mode:
-            self.camera_worker.command("start", mode)
+            self.capture_pending = True
+            if self.capture_streaming:
+                self.camera_worker.command("stop")
+            else:
+                self.camera_worker.command("start", mode)
             self.preview_button.setEnabled(False)
+            self.record_button.setEnabled(False)
             self.mode_selector.setEnabled(False)
-            self.mode_selector.info.setText(self.mode_selector.info.text() + " · disconnect to change format")
+            if not self.capture_streaming:
+                self.capture_has_frame = False
+
+    def camera_state_changed(self, streaming, recording):
+        self.capture_streaming, self.capture_pending = streaming, False
+        if not streaming:
+            self.capture_has_frame = False
+        self.preview_button.setText("Stop live view" if streaming else "Start live view")
+        self.preview_button.setToolTip(
+            "Stopping live view also finishes the current recording. The camera stays connected."
+            if streaming else "Start acquisition with the selected resolution, color and bit depth."
+        )
+        self.preview_button.setEnabled(True)
+        self.mode_selector.setEnabled(not streaming)
+        self.record_button.setProperty("recording", recording)
+        self.record_button.setText("Stop recording" if recording else "Record SER…")
+        self.record_button.setEnabled(streaming and self.capture_has_frame)
+        if not streaming:
+            self.capture_stats.setText("Live view stopped · camera connected")
 
     def camera_preview(self, image, stats):
+        if not self.capture_streaming or self.capture_pending:
+            return
+        self.capture_has_frame = True
         self.last_capture_image = image
         self.capture_view.set_image(image)
         self.capture_histogram.set_image(image)
         self.capture_stats.setText(
             f"{stats['shape'][1]} × {stats['shape'][0]} · {stats['bits']}-bit {stats['pattern']} · "
             f"{stats['fps']:.1f} fps · {stats['recorded']:,} recorded · {stats['dropped']:,} dropped"
+            + (f" · {stats['invalid']:,} damaged frames skipped" if stats.get("invalid") else "")
         )
         self.record_button.setEnabled(True)
         self.snapshot_button.setEnabled(True)
@@ -396,20 +431,24 @@ class MainWindow(QMainWindow):
         self.record_button.setProperty("recording", stats["recording"])
 
     def camera_closed(self):
+        self.capture_streaming, self.capture_pending, self.capture_has_frame = False, False, False
         self.connect_button.setEnabled(True)
         self.connect_button.setText("Connect")
         self.device_combo.setEnabled(True)
         self.scan_button.setEnabled(True)
         self.preview_button.setEnabled(False)
+        self.preview_button.setText("Start live view")
         self.mode_selector.setEnabled(False)
         self.record_button.setEnabled(False)
         self.record_button.setProperty("recording", False)
         self.record_button.setText("Record SER…")
+        self.capture_stats.setText("No camera connected")
         self.log("Camera disconnected")
 
     def record(self):
         if self.record_button.property("recording"):
             self.camera_worker.command("stop_record")
+            self.record_button.setEnabled(False)
             return
         path = self.save_file(
             "Record raw camera frames", "planet-" + time.strftime("%Y%m%d-%H%M%S") + ".ser",
@@ -425,6 +464,7 @@ class MainWindow(QMainWindow):
         self.use_recording_button.setEnabled(frames > 0)
         self.record_button.setProperty("recording", False)
         self.record_button.setText("Record SER…")
+        self.record_button.setEnabled(self.capture_streaming and self.capture_has_frame and not self.capture_pending)
 
     def use_recording(self):
         if self.last_recording:
@@ -1523,6 +1563,8 @@ class MainWindow(QMainWindow):
         Try the simulator to practice the entire workflow.</p><p>2. Send the recording to <b>Prepare & Stack</b>. Choose Planet for object centering,
         or Moon / Sun for surface images. Keep the best 25% as a starting point and run Align & Stack.</p>
         <p>3. In <b>Sharpen</b>, increase the fine wavelet layers gradually. Use Show original to compare. Export TIFF, PNG, or FITS.</p>
+        <p>To change capture resolution, color/mono, bit depth or frame rate, press <b>Stop live view</b>,
+        adjust the settings, then <b>Start live view</b>. The camera stays connected. Stopping live view finishes an active recording.</p>
         <h2>Camera connections</h2><p><b>Direct UVC:</b> raw Bayer, mono, RGB, YUV, and MJPEG modes on macOS and Linux.
         The macOS USB interface fix from oaCapture is included. NexImage 10 GRBG is supported.</p>
         <p><b>System cameras:</b> DirectShow on Windows, AVFoundation on macOS, V4L2 on Linux. Installed system drivers are required.
@@ -1534,6 +1576,9 @@ class MainWindow(QMainWindow):
         Windows ASCOM cameras through ASCOM Remote. INDI and Alpaca throughput depends on the server and camera.</p>
         <h2>If connection fails</h2><p>Close other camera applications, reconnect USB directly, and scan again. On Linux, grant your account
         access to the camera with a udev rule. For system cameras, allow camera access in your OS privacy settings.</p>
+        <p>Occasional damaged UVC frames are skipped. Repeated damaged frames stop live view so you can choose another mode.
+        Each recording has a <b>.ser.json</b> report beside it with duration, skipped frames, stopping reason and errors.
+        The diagnostic log below retains messages from previous sessions. Use <b>Save diagnostics</b> to keep a copy.</p>
         <p>Camera discovery does not prove every model works. See the repository's camera support table for tested hardware and driver requirements.</p>
         <h2>About the processing</h2><p>Local alignment uses overlapping patches and ranks frames independently at each patch.
         Enlarged outputs use Lanczos resampling. This release does not implement rotational derotation or drizzle reconstruction.</p>
@@ -1542,10 +1587,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(button("Configure camera connections…", self.configure_cameras))
         self.diagnostics = QPlainTextEdit()
         self.diagnostics.setReadOnly(True)
+        self.diagnostics.setMaximumBlockCount(2000)
+        self.diagnostics.setPlainText(self.diagnostic_log.read())
         self.diagnostics.setMaximumHeight(150)
         self.diagnostics.setPlaceholderText("Camera discovery and connection messages will appear here.")
         layout.addWidget(self.diagnostics)
+        layout.addWidget(button("Save diagnostics…", self.save_diagnostics))
         return page
+
+    def save_diagnostics(self):
+        path = self.save_file("Save diagnostics", "planetary-studio-diagnostics.txt", "Text file (*.txt)", ".txt")
+        if path:
+            try:
+                Path(path).write_text(self.diagnostics.toPlainText(), encoding="utf8")
+                self.log("Diagnostics saved: " + path)
+            except OSError as e:
+                self.error("Could not save diagnostics: " + str(e))
 
     def configure_cameras(self):
         if self.camera_worker and self.camera_worker.isRunning():

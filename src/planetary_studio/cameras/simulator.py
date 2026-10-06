@@ -71,6 +71,9 @@ class SimulatedCamera(Camera):
     def close(self):
         pass
 
+    def stop(self):
+        pass
+
 
 def discover():
     return [Device("Simulator", "planet", "Simulated Jupiter · practice and test the full workflow")]

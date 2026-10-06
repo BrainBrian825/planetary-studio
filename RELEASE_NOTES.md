@@ -1,4 +1,14 @@
-Planetary Studio 0.5.1 adds recording filters, quality choices, and alignment controls, and simplifies interface text.
+Planetary Studio 0.5.2 lets you change capture settings without disconnecting and improves recording recovery and diagnostics.
+
+- Stop live view, change resolution, color/mono, bit depth or frame rate, then start again. The camera stays connected. Stopping live view finishes any active recording. Exposure/gain controls remain available.
+- UVC stream restarts discard old frames, reset counters and preserve the camera handle. ZWO ASI/QHY video and INDI/Alpaca exposures have matching stop/restart lifecycles; system cameras pause reads while retaining their driver connection.
+- Individual damaged UVC frames are skipped and counted. Thirty consecutive invalid frames stop live view, finalize any recording and allow a different mode to be selected.
+- A failed mode start or recording file open leaves the camera connected. Disk write errors stop recording while retaining live view. SER finalization closes the file even if disk synchronization fails and removes any partial final frame when possible.
+- Recording reports include selected resolution/rate/FOURCC, requested and actual duration, skipped frames, stopping reason, exact error and finalization status. Time limits also work while the camera is not delivering frames.
+- Camera support retains a bounded local diagnostic log across app sessions and provides Save diagnostics. Reports and logs stay on the computer unless you choose to share them.
+- Automated checks exercise 8/16-bit damaged-frame recovery, format changes, persistent corruption, camera disconnection, disk errors, recording deadlines, UI state and vendor SDK lifecycles. A hardware test cannot identify the cause of a past recording failure whose error was not retained.
+
+Previous 0.5.1 features:
 
 - Page headings use Capture, Prepare & Stack, Sharpen, Batch Queue, and Camera support, with direct descriptions of their controls.
 - Minimum brightness filters automatic alignment point centers using real image brightness; the grid is centered on the bright region. Preview display stretching does not affect placement.

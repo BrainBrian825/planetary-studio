@@ -128,6 +128,7 @@ class AsiCamera(Camera):
         return result
 
     def start(self, mode):
+        self.stop()
         self.mode = mode
         check(self.lib.ASISetROIFormat(self.id, mode.width, mode.height, 1, mode.details["type"]), "ROI")
         x = ((self.info.MaxWidth - mode.width) // 2) // 8 * 8
@@ -158,10 +159,15 @@ class AsiCamera(Camera):
         control, scale = self._types[name]
         check(self.lib.ASISetControlValue(self.id, control, round(value * scale), 0), name)
 
-    def close(self):
+    def stop(self):
         if self.started:
-            self.lib.ASIStopVideoCapture(self.id)
+            check(self.lib.ASIStopVideoCapture(self.id), "stream stop")
             self.started = False
-        if self.opened:
-            self.lib.ASICloseCamera(self.id)
-            self.opened = False
+
+    def close(self):
+        try:
+            self.stop()
+        finally:
+            if self.opened:
+                self.lib.ASICloseCamera(self.id)
+                self.opened = False

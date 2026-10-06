@@ -76,9 +76,14 @@ def test_asi_adapter_obeys_video_lifecycle_and_preserves_raw16(monkeypatch):
         frame = camera.read()
         assert frame.pattern == "GRBG" and frame.pixels.dtype == np.uint16 and frame.dropped == 2
         np.testing.assert_array_equal(frame.pixels, 12345)
+        camera.stop()
+        assert camera.opened and not camera.started and "close" not in calls
+        camera.start(mode)
+        assert camera.read().bits == 16
     finally:
         camera.close()
     assert calls[:2] == ["open", "init"] and calls[-3:] == ["start", "stop", "close"]
+    assert calls.count("open") == 1 and calls.count("stop") == 2
 
 
 def test_qhy_adapter_initializes_stream_mode_and_preserves_raw8(monkeypatch):
@@ -148,7 +153,12 @@ def test_qhy_adapter_initializes_stream_mode_and_preserves_raw8(monkeypatch):
         frame = camera.read()
         assert frame.pattern == "GRBG" and frame.bits == 8
         np.testing.assert_array_equal(frame.pixels, 100)
+        camera.stop()
+        assert camera.handle and not camera.started and "close" not in calls
+        camera.start(camera.modes()[0])
+        assert camera.read().bits == 8
     finally:
         camera.close()
     assert calls[:4] == ["resource", "open", ("mode", 1), "init"]
     assert calls[-3:] == ["stop", "close", "release"]
+    assert calls.count("open") == 1 and calls.count("stop") == 2
