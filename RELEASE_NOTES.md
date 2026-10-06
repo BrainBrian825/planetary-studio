@@ -1,4 +1,4 @@
-Planetary Studio 0.5.3 fixes false planetary motion caused by fixed sensor noise and rectangular local stack seams.
+Planetary Studio 0.5.4 fixes false planetary motion caused by fixed sensor noise and rectangular local stack seams.
 
 - Registration compares smoothed image structure before accepting a phase-correlation proposal and refines translation using intensity correlation. A fixed noise pattern cannot win merely because phase whitening amplified its high-frequency signal. Registration works at bounded resolution and retains coordinates at the original subpixel scale.
 - Local registration applies the requested displacement limit while evaluating candidates. Failed refinement retains the best coarse match; poorly correlated frames are rejected.
@@ -6,6 +6,7 @@ Planetary Studio 0.5.3 fixes false planetary motion caused by fixed sensor noise
 - Hot-pixel filtering uses a faster median operation, preserving separate Bayer planes and the existing brightness threshold.
 - Stack reports include the application version, registration method and patch blending method.
 - Regression tests cover soft planetary images with displaced fixed sensor noise, subpixel translations, local displacement limits and smooth transitions between local/global frame selections. The packaged self-test also exercises sensor-noise rejection.
+- Recording recovery tests wait for all completion signals, including the final recording state, so their results are consistent across platforms.
 
 Previous 0.5.2 features:
 

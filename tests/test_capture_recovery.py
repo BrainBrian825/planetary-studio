@@ -175,7 +175,8 @@ def test_disk_write_failure_keeps_camera_live_and_saves_complete_frames(
     begin_capture(camera, worker, state)
     path = tmp_path / "full-disk.ser"
     worker.command("record", str(path), 0)
-    wait_until(lambda: bool(state["saved"]))
+    # Completion, capture state and error are separate queued signals.
+    wait_until(lambda: bool(state["saved"]) and not state["recording"] and bool(state["errors"]))
     assert worker.isRunning() and state["streaming"] and not state["recording"]
     assert "No space" in state["errors"][0]
     with SerReader(path) as reader:
@@ -239,7 +240,7 @@ def test_finalization_failure_is_reported_without_disconnect(connected_camera, t
     begin_capture(camera, worker, state)
     path = tmp_path / "sync-failure.ser"
     worker.command("record", str(path), 0.1)
-    wait_until(lambda: bool(state["errors"]))
+    wait_until(lambda: bool(state["errors"]) and not state["recording"])
     assert worker.isRunning() and state["streaming"] and not state["recording"] and not state["saved"]
     report = json.loads(path.with_suffix(".ser.json").read_text())
     assert not report["finalized"] and "Disk sync failed" in report["finalization_error"]
