@@ -1,4 +1,13 @@
-Planetary Studio 0.5.2 lets you change capture settings without disconnecting and improves recording recovery and diagnostics.
+Planetary Studio 0.5.3 fixes false planetary motion caused by fixed sensor noise and rectangular local stack seams.
+
+- Registration compares smoothed image structure before accepting a phase-correlation proposal and refines translation using intensity correlation. A fixed noise pattern cannot win merely because phase whitening amplified its high-frequency signal. Registration works at bounded resolution and retains coordinates at the original subpixel scale.
+- Local registration applies the requested displacement limit while evaluating candidates. Failed refinement retains the best coarse match; poorly correlated frames are rejected.
+- Local patch coverage now feathers into the underlying global stack, including sparse or irregular alignment grids. The patch window is no longer canceled by normalization at uncovered boundaries.
+- Hot-pixel filtering uses a faster median operation, preserving separate Bayer planes and the existing brightness threshold.
+- Stack reports include the application version, registration method and patch blending method.
+- Regression tests cover soft planetary images with displaced fixed sensor noise, subpixel translations, local displacement limits and smooth transitions between local/global frame selections. The packaged self-test also exercises sensor-noise rejection.
+
+Previous 0.5.2 features:
 
 - Stop live view, change resolution, color/mono, bit depth or frame rate, then start again. The camera stays connected. Stopping live view finishes any active recording. Exposure/gain controls remain available.
 - UVC stream restarts discard old frames, reset counters and preserve the camera handle. ZWO ASI/QHY video and INDI/Alpaca exposures have matching stop/restart lifecycles; system cameras pause reads while retaining their driver connection.

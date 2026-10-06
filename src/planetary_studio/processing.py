@@ -7,10 +7,11 @@ import math
 import threading
 import cv2
 import numpy as np
-from scipy.ndimage import gaussian_filter, median_filter
+from scipy.ndimage import gaussian_filter
 from .imaging import normalized, debayer, luminance, write_image, read_image
 from .sources import open_source, IndexedSource
 from .ser import SerWriter
+from . import __version__
 
 
 class Cancelled(Exception):
@@ -108,6 +109,9 @@ class StackResult:
             json.dumps(
                 {
                     "application": "Planetary Studio",
+                    "application_version": __version__,
+                    "registration_method": "Smoothed intensity correlation and ECC translation",
+                    "local_patch_blending": "Feathered coverage over the global stack",
                     "input_frames": self.input_frames,
                     "source_frames": self.source_count or self.input_frames,
                     "source_frame_indices": self.source_indices,
@@ -214,17 +218,71 @@ def warp_shift(image, dx, dy):
     )
 
 
-def register(reference, frame):
+def register(reference, frame, *, max_shift=None):
+    """Match image structure, without letting phase whitening amplify sensor noise.
+
+    Phase correlation proposes a coarse translation. Compare it with no motion
+    using smoothed intensity correlation, then refine the better candidate with
+    ECC. Downsampling bounds the cost of global registration; output coordinates
+    retain the original subpixel scale. Local callers can bound displacement.
+    """
     ref, moving = luminance(reference), luminance(frame)
+    h, w = ref.shape
+    factor = min(1.0, 256 / max(h, w))
+    if factor < 1:
+        size = (max(8, round(w * factor)), max(8, round(h * factor)))
+        ref = cv2.resize(ref, size, interpolation=cv2.INTER_AREA)
+        moving = cv2.resize(moving, size, interpolation=cv2.INTER_AREA)
+    sh, sw = ref.shape
+    sx, sy = sw / w, sh / h
+    ref = cv2.GaussianBlur(ref, (0, 0), 1.2)
+    moving = cv2.GaussianBlur(moving, (0, 0), 1.2)
     if float(ref.std()) < 1e-7 or float(moving.std()) < 1e-7:
         return 0.0, 0.0, 0.0
-    h, w = ref.shape
-    window = cv2.createHanningWindow((w, h), cv2.CV_32F)
-    shift, response = cv2.phaseCorrelate(ref - ref.mean(), moving - moving.mean(), window)
-    dx, dy = -float(shift[0]), -float(shift[1])
-    if not np.isfinite([dx, dy, response]).all() or abs(dx) > w * 0.4 or abs(dy) > h * 0.4:
+
+    def allowed(dx, dy):
+        if not np.isfinite([dx, dy]).all():
+            return False
+        if abs(dx) > sw * 0.4 or abs(dy) > sh * 0.4:
+            return False
+        if max_shift is not None:
+            return math.hypot(dx / sx, dy / sy) <= max_shift
+        return True
+
+    def correlation(dx, dy):
+        moved = warp_shift(moving, dx, dy)
+        # Ignore the unsupported border instead of correlating black padding.
+        x0, x1 = max(0, math.ceil(dx)), min(sw, math.floor(sw + dx))
+        y0, y1 = max(0, math.ceil(dy)), min(sh, math.floor(sh + dy))
+        a, b = ref[y0:y1, x0:x1], moved[y0:y1, x0:x1]
+        a, b = a - a.mean(), b - b.mean()
+        denominator = math.sqrt(float(np.sum(a * a)) * float(np.sum(b * b)))
+        return float(np.sum(a * b)) / denominator if denominator > 1e-12 else 0.0
+
+    dx, dy, score = 0.0, 0.0, correlation(0, 0)
+    window = cv2.createHanningWindow((sw, sh), cv2.CV_32F)
+    phase, _ = cv2.phaseCorrelate(ref - ref.mean(), moving - moving.mean(), window)
+    px, py = -float(phase[0]), -float(phase[1])
+    if allowed(px, py):
+        candidate_score = correlation(px, py)
+        if candidate_score > score:
+            dx, dy, score = px, py, candidate_score
+    matrix = np.float32([[1, 0, -dx], [0, 1, -dy]])
+    try:
+        _, matrix = cv2.findTransformECC(
+            ref, moving, matrix, cv2.MOTION_TRANSLATION,
+            (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 40, 1e-5), None, 5,
+        )
+        ex, ey = -float(matrix[0, 2]), -float(matrix[1, 2])
+        if allowed(ex, ey):
+            refined_score = correlation(ex, ey)
+            if refined_score >= score:
+                dx, dy, score = ex, ey, refined_score
+    except cv2.error:
+        pass  # A flat patch or failed refinement retains the best coarse match.
+    if score < 0.2:
         return 0.0, 0.0, 0.0
-    return dx, dy, float(response)
+    return dx / sx, dy / sy, min(1.0, score)
 
 
 class Preprocessor:
@@ -271,10 +329,10 @@ class Preprocessor:
                 for y in range(2):
                     for x in range(2):
                         plane = image[y::2, x::2]
-                        med = median_filter(plane, size=3)
+                        med = cv2.medianBlur(np.ascontiguousarray(plane), 3)
                         plane[:] = np.where(plane > med + 0.15, med, plane)
             else:
-                med = median_filter(image, size=(3, 3, 1) if image.ndim == 3 else 3)
+                med = cv2.medianBlur(np.ascontiguousarray(image), 3)
                 image = np.where(image > med + 0.15, med, image)
         if self.pattern in ("RGGB", "GRBG", "GBRG", "BGGR") and image.ndim == 2:
             image = normalized(debayer(np.rint(np.clip(image, 0, 1) * 65535).astype(np.uint16), self.pattern))
@@ -507,7 +565,7 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
                 x, y = points[p]
                 region = np.s_[y - radius : y + radius, x - radius : x + radius]
                 patch, ref_patch = moved[region], reference[region]
-                lx, ly, response = register(ref_patch, patch)
+                lx, ly, response = register(ref_patch, patch, max_shift=options.max_local_shift)
                 if response < 0.05 or math.hypot(lx, ly) > options.max_local_shift:
                     lx, ly = 0.0, 0.0
                 # Sample the full globally aligned image so patch edges remain valid.
@@ -524,7 +582,14 @@ def stack_source(path, options: StackOptions | None = None, progress=None, cance
         divisor = global_weight[..., None] if reference.ndim == 3 else global_weight
         result = np.divide(global_sum, divisor, out=np.zeros_like(global_sum), where=divisor > 0)
         divisor = local_weight[..., None] if reference.ndim == 3 else local_weight
-        np.divide(local_sum, divisor, out=result, where=divisor > 1e-6)
+        local_result = np.divide(local_sum, divisor, out=np.zeros_like(local_sum), where=divisor > 1e-6)
+        # Keep the global stack under the patches. Normalizing a lone Hann patch
+        # cancels its feathering, so replacing pixels wherever weight > 0 makes
+        # rectangular seams. Blend according to coverage to retain the taper.
+        coverage = np.clip(local_weight / global_keep, 0, 1)
+        if reference.ndim == 3:
+            coverage = coverage[..., None]
+        result = result * (1 - coverage) + local_result * coverage
         result = np.clip(result, 0, 1).astype(np.float32)
         if options.scale != 1:
             h, w = result.shape[:2]

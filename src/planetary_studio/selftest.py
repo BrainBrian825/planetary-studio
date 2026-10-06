@@ -9,8 +9,8 @@ import cv2
 from . import __version__
 from .cameras.simulator import planet_image
 from .ser import SerWriter, SerReader
-from .imaging import read_image, normalized, write_image
-from .processing import StackOptions, stack_source, finish_image, export_prepared, quality_score
+from .imaging import read_image, normalized, write_image, luminance
+from .processing import StackOptions, stack_source, finish_image, export_prepared, quality_score, register, warp_shift
 from .preview import preview_frame, preview_sample
 
 
@@ -46,6 +46,12 @@ def run_self_test(report_path=None):
         assert result.image.shape == truth.shape and np.isfinite(result.image).all()
         assert len(result.selected) == 12 and len(result.alignment_points) > 0
         checks.append("Quality ranking, registration, local alignment, stacking")
+        soft = cv2.GaussianBlur(luminance(planet_image(320, 256)), (0, 0), 6)
+        sensor_noise = np.random.default_rng(54).normal(0, .025, soft.shape).astype(np.float32)
+        dx, dy, confidence = register(soft + sensor_noise,
+                                     warp_shift(soft, 3.25, -2.5) + warp_shift(sensor_noise, 37, -24))
+        assert abs(dx + 3.25) < .5 and abs(dy - 2.5) < .5 and confidence > .95
+        checks.append("Soft planetary target registration ignores displaced fixed sensor noise")
         frame = preview_frame(path, 3, StackOptions(crop_width=64, crop_height=64))
         assert frame.image.shape == (64, 64, 3)
         sample = preview_sample(path, StackOptions(keep_percent=50, alignment_size=32), 8)

@@ -63,10 +63,10 @@ def test_global_ranking_skips_unselected_global_registration(tmp_path, monkeypat
     path = recording(tmp_path / "ranking.ser")
     full_calls = []
     original_register = processing.register
-    def register(reference, frame):
+    def register(reference, frame, **kwargs):
         if reference.shape[:2] == (80, 96):
             full_calls.append(True)
-        return original_register(reference, frame)
+        return original_register(reference, frame, **kwargs)
     monkeypatch.setattr(processing, "register", register)
     options = StackOptions(keep_percent=25, center_object=False, alignment_size=32,
                            manual_alignment_points=[(48, 40)], local_quality=local_quality)
