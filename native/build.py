@@ -44,6 +44,7 @@ args = [
     "-I" + str(generated.parent),
     "-I" + str(vendor / "include"),
     str(root / "native/bridge.c"),
+    str(root / "native/euvc.c"),
     *map(str, sources),
     *usb_flags,
     "-o",

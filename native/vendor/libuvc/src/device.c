@@ -734,18 +734,11 @@ uvc_error_t uvc_get_device_list(
 	   ++altsetting_idx) {
 	if_desc = &interface->altsetting[altsetting_idx];
 
-        // Skip TIS cameras that definitely aren't UVC even though they might
-        // look that way
-
-        if ( 0x199e == desc.idVendor && desc.idProduct  >= 0x8201 &&
-            desc.idProduct <= 0x8208 ) {
-          continue;
-        }
-
         // Special case for Imaging Source cameras
 	/* Video, Streaming */
         if ( 0x199e == desc.idVendor && ( 0x8101 == desc.idProduct ||
-            0x8102 == desc.idProduct ) &&
+            0x8102 == desc.idProduct ||
+            (desc.idProduct >= 0x8201 && desc.idProduct <= 0x8208) ) &&
             if_desc->bInterfaceClass == 255 &&
             if_desc->bInterfaceSubClass == 2 ) {
 	  got_interface = 1;
@@ -1069,7 +1062,8 @@ uvc_error_t uvc_scan_control(uvc_device_handle_t *devh, uvc_device_info_t *info)
   int haveTISCamera = 0;
   if ( get_device_descriptor ( devh, &dev_desc ) == UVC_SUCCESS ) {
 		if ( 0x199e == dev_desc->idVendor && ( 0x8101 == dev_desc->idProduct ||
-				0x8102 == dev_desc->idProduct )) {
+				0x8102 == dev_desc->idProduct ||
+                (dev_desc->idProduct >= 0x8201 && dev_desc->idProduct <= 0x8208))) {
 			haveTISCamera = 1;
 		}
 		uvc_free_device_descriptor ( dev_desc );

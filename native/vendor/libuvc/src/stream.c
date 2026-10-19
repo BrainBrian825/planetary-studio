@@ -39,6 +39,7 @@
 #include "libuvc/libuvc.h"
 #include "libuvc/libuvc_internal.h"
 #include "errno.h"
+#include "../../../euvc.h"
 
 #ifdef _MSC_VER
 
@@ -207,6 +208,8 @@ uvc_error_t uvc_query_stream_ctrl(
     uvc_stream_ctrl_t *ctrl,
     uint8_t probe,
     enum uvc_req_code req) {
+  if (ps_euvc_device(devh->dev->usb_dev))
+    return ps_euvc_query(devh, ctrl, probe, req);
   uint8_t buf[34];
   size_t len;
   uvc_error_t err;

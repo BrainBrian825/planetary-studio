@@ -14,6 +14,50 @@ Hardware validation on October 2, 2026: macOS 27 arm64, USB 3, NexImage 10, 640�
 
 `BA16` is offered only for the NexImage 10's known GRBG sensor; generic BA16 cannot tell the Bayer order. Other unknown FOURCCs are skipped instead of interpreted incorrectly.
 
+## Celestron NexImage Burst C (EUVC)
+
+The native USB bridge includes a port of OpenAstro's EUVC protocol for Imaging
+Source USB vendor `199e`, products `8201`–`8208`, the family used by the Burst C.
+Rebuild with `python native/build.py`, launch Planetary Studio from this source
+checkout, then choose **Scan cameras → your camera [UVC] → Connect**. The USB
+product string may identify an Imaging Source model rather than “NexImage”.
+Exposure and gain use the existing camera controls; raw Bayer samples are
+preserved in SER recordings and debayered for preview.
+
+This port initially exposes the largest advertised raw mode at 8 bits with
+binning disabled. Smaller ROI and binned modes from oaCapture are not exposed.
+The Bayer order comes from the camera's EUVC color-format control rather than
+interpreting its misleading YUV descriptor as converted color. Unknown Bayer
+codes fail explicitly. Frame rates use OpenAstro's 60, 30, 15, 7.5 and 3.75 fps
+choices, filtered against the sensor's reported pixel-clock limits. The current
+UI rounds the last two labels to 8 and 4 fps; the exact intervals are retained.
+Long exposures can reduce the measured rate further.
+
+EUVC setup requests use OpenAstro's five-second control timeout. If live view
+still fails to start, the error identifies the failing USB operation (for
+example, stream COMMIT, binning, or pixel clock), including the selector for
+sensor controls. Use **Camera support → Save diagnostics…** to retain that detail.
+After rebuilding the native bridge, completely quit and restart the application
+to load the updated library.
+
+Linux USB permissions are required. An example udev rule for this EUVC family is:
+
+```udev
+SUBSYSTEM=="usb", ATTR{idVendor}=="199e", ATTR{idProduct}=="820[1-8]", TAG+="uaccess"
+```
+
+Install the rule in `/etc/udev/rules.d/99-neximage.rules`, reload udev rules, and
+reconnect the camera. Close oaCapture or any other application using it first.
+For a source-checkout hardware check, run:
+
+```sh
+python -m planetary_studio probe-camera 'camera product name' burst-test.ser --seconds 3
+```
+
+The Linux native build and simulated USB protocol tests pass. Physical Burst C
+capture has not been validated in this development environment. The direct USB
+backend is available on Linux/macOS; Windows continues to use system drivers.
+
 ## UVC and system cameras
 
 Direct UVC on Unix supports the formats listed in the README. Mode support is read from each camera. If a driver offers a control, the application reads its range instead of guessing it. Some cameras have proprietary exposure controls or need a vendor driver; a UVC interface alone does not guarantee full control.

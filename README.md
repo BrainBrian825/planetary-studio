@@ -80,6 +80,7 @@ All file pickers start in the last folder you selected in the app, and remember 
 | Connection | Platforms | Capabilities | Validation |
 |---|---|---|---|
 | Direct USB UVC | macOS, Linux | GRBG/RGGB/GBRG/BGGR, mono, RGB, YUV, MJPEG; advertised sizes/rates; 8/16-bit where available | **NexImage 10 raw GRBG8 recorded on macOS 27 arm64**; native library built on Linux |
+| Direct USB EUVC (NexImage Burst C family) | macOS, Linux | Full sensor raw Bayer/mono 8-bit, vendor frame-rate control, exposure/gain | Ported from OpenAstro; Linux build and simulated protocol tests |
 | System camera drivers | macOS, Windows, Linux | AVFoundation / DirectShow / V4L2 converted 8-bit RGB | Application builds; individual camera drivers require hardware validation |
 | ZWO ASI SDK | macOS, Windows, Linux | Raw8/Raw16, RGB24, mono, sensor ROI, gain/exposure/offset/bandwidth where available | ABI and adapter tests; hardware validation pending |
 | QHY SDK | macOS, Windows, Linux | Live Raw8/Raw16, sensor ROI, gain/exposure/offset/USB controls where available | Adapter tests; hardware validation pending |

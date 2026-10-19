@@ -7,6 +7,7 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include "euvc.h"
 
 typedef struct { int vid, pid, bus, address; char name[256], serial[128]; } ps_device;
 typedef struct { int width, height, fps, bits, format_index, frame_index, interface_number, interval; char fourcc[5]; } ps_mode;
@@ -21,9 +22,13 @@ typedef struct {
   ps_frame meta;
   unsigned long long consumed;
   int running, failed;
+  ps_euvc euvc;
 } ps_session;
 
-const char *ps_error(int code) { return uvc_strerror((uvc_error_t)code); }
+const char *ps_error(int code) {
+  const char *detail = ps_euvc_error(code);
+  return detail ? detail : uvc_strerror((uvc_error_t)code);
+}
 size_t ps_abi_size(int structure) {
   if (structure == 0) return sizeof(ps_device);
   if (structure == 1) return sizeof(ps_mode);
@@ -32,6 +37,7 @@ size_t ps_abi_size(int structure) {
 }
 
 int ps_devices(ps_device *out, int capacity) {
+  ps_euvc_clear_error();
   uvc_context_t *ctx = NULL;
   uvc_device_t **list = NULL;
   int error = uvc_init(&ctx, NULL), count = 0;
@@ -54,6 +60,7 @@ int ps_devices(ps_device *out, int capacity) {
 }
 
 ps_session *ps_open(int bus, int address, int *error) {
+  ps_euvc_clear_error();
   ps_session *s = calloc(1, sizeof(*s));
   if (!s) { *error = UVC_ERROR_NO_MEM; return NULL; }
   uvc_device_t **list = NULL;
@@ -69,6 +76,10 @@ ps_session *ps_open(int bus, int address, int *error) {
   }
   if (list) uvc_free_device_list(list, 1);
   if (*error) { uvc_exit(s->ctx); free(s); return NULL; }
+  if (ps_euvc_device(s->handle->dev->usb_dev)) {
+    *error = ps_euvc_init(s->handle, &s->euvc);
+    if (*error) { uvc_close(s->handle); uvc_exit(s->ctx); free(s); return NULL; }
+  }
   pthread_mutex_init(&s->mutex, NULL);
   pthread_cond_init(&s->cond, NULL);
   return s;
@@ -78,12 +89,23 @@ int ps_modes(ps_session *s, ps_mode *out, int capacity) {
   int count = 0;
   for (const uvc_format_desc_t *f = uvc_get_format_descs(s->handle); f; f = f->next)
     for (const uvc_frame_desc_t *r = f->frame_descs; r; r = r->next) {
+      if (s->euvc.frame && r != s->euvc.frame) continue;
       int n = r->bFrameIntervalType ? r->bFrameIntervalType : 1;
+      if (s->euvc.frame) n = 5;
       for (int j = 0; j < n && count < capacity; j++) {
         ps_mode *m = &out[count++];
         memset(m, 0, sizeof(*m));
         m->width = r->wWidth; m->height = r->wHeight;
-        unsigned int interval = r->bFrameIntervalType && r->intervals ? r->intervals[j] : r->dwDefaultFrameInterval;
+        unsigned int interval = 0;
+        if (!s->euvc.frame)
+          interval = r->bFrameIntervalType && r->intervals ? r->intervals[j] : r->dwDefaultFrameInterval;
+        if (s->euvc.frame) {
+          const unsigned int intervals[] = {2666667, 1333333, 666667, 333333, 166667};
+          interval = intervals[j];
+          uint64_t pixels = (uint64_t)(r->wWidth + s->euvc.blank_x) * (r->wHeight + s->euvc.blank_y);
+          uint64_t clock = (pixels * 10000000 + interval / 2) / interval;
+          if (clock < s->euvc.clock_min || clock > s->euvc.clock_max) { count--; continue; }
+        }
         m->fps = interval ? (10000000 + interval / 2) / interval : 30;
         m->interval = interval ? interval : 333333;
         m->bits = f->bBitsPerPixel;
@@ -119,18 +141,30 @@ static void ps_callback(uvc_frame_t *frame, void *user) {
 }
 
 int ps_start(ps_session *s, const ps_mode *mode) {
+  ps_euvc_clear_error();
   uvc_stream_ctrl_t ctrl;
   memset(&ctrl, 0, sizeof(ctrl));
   ctrl.bInterfaceNumber = mode->interface_number;
   int error = uvc_claim_if(s->handle, ctrl.bInterfaceNumber);
   if (error) return error;
-  error = uvc_query_stream_ctrl(s->handle, &ctrl, 1, UVC_GET_MAX);
-  if (error) return error;
+  if (!s->euvc.frame) {
+    error = uvc_query_stream_ctrl(s->handle, &ctrl, 1, UVC_GET_MAX);
+    if (error) return error;
+  }
   ctrl.bmHint = 1;
   ctrl.bFormatIndex = mode->format_index; ctrl.bFrameIndex = mode->frame_index;
   ctrl.bInterfaceNumber = mode->interface_number;
   ctrl.dwFrameInterval = mode->interval;
-  error = uvc_probe_stream_ctrl(s->handle, &ctrl);
+  if (s->euvc.frame) {
+    uvc_frame_desc_t *r = s->euvc.frame;
+    if (mode->format_index != r->parent->bFormatIndex || mode->frame_index != r->bFrameIndex ||
+        mode->width != r->wWidth || mode->height != r->wHeight || mode->interval <= 0)
+      return UVC_ERROR_INVALID_MODE;
+    ctrl.dwMaxVideoFrameSize = (uint32_t)r->wWidth * r->wHeight;
+    ctrl.dwMaxPayloadTransferSize = r->dwMaxVideoFrameBufferSize;
+    if (!ctrl.dwMaxPayloadTransferSize) return UVC_ERROR_INVALID_MODE;
+    error = 0;
+  } else error = uvc_probe_stream_ctrl(s->handle, &ctrl);
   if (error) return error;
   pthread_mutex_lock(&s->mutex);
   memset(&s->meta, 0, sizeof(s->meta));
@@ -138,7 +172,16 @@ int ps_start(ps_session *s, const ps_mode *mode) {
   s->failed = 0;
   s->running = 1;
   pthread_mutex_unlock(&s->mutex);
-  error = uvc_start_streaming(s->handle, &ctrl, ps_callback, s, 0);
+  if (s->euvc.frame) {
+    uvc_stream_handle_t *stream = NULL;
+    error = uvc_stream_open_ctrl(s->handle, &stream, &ctrl);
+    if (!error) error = ps_euvc_configure(s->handle, &s->euvc, mode->interval);
+    if (!error) error = uvc_stream_start(stream, ps_callback, s, 0);
+    if (error) {
+      if (!ps_euvc_error(error)) ps_euvc_record_error(error, "EUVC opening/submitting USB stream");
+      if (stream) uvc_stream_close(stream);
+    }
+  } else error = uvc_start_streaming(s->handle, &ctrl, ps_callback, s, 0);
   if (error) {
     pthread_mutex_lock(&s->mutex);
     s->running = 0;
@@ -183,6 +226,7 @@ int ps_read(ps_session *s, void *out, size_t capacity, ps_frame *meta, int timeo
 }
 
 int ps_control(ps_session *s, int control, int value) {
+  ps_euvc_clear_error();
   if (control == 0) {
     int error = uvc_set_ae_mode(s->handle, 1);
     if (error && error != UVC_ERROR_PIPE && error != UVC_ERROR_NOT_SUPPORTED) return error;
@@ -193,6 +237,7 @@ int ps_control(ps_session *s, int control, int value) {
 }
 
 int ps_control_range(ps_session *s, int control, double *minimum, double *maximum, double *current) {
+  ps_euvc_clear_error();
   if (control == 0) {
     uint32_t lo, hi, value;
     int error = uvc_get_exposure_abs(s->handle, &lo, UVC_GET_MIN);
