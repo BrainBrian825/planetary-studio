@@ -54,8 +54,7 @@ For a source-checkout hardware check, run:
 python -m planetary_studio probe-camera 'camera product name' burst-test.ser --seconds 3
 ```
 
-The Linux native build and simulated USB protocol tests pass. Physical Burst C
-capture has not been validated in this development environment. The direct USB
+The Linux native build and simulated USB protocol tests pass.  The direct USB
 backend is available on Linux/macOS; Windows continues to use system drivers.
 
 ## UVC and system cameras
